@@ -1,0 +1,39 @@
+# The complete ssh(1) command line Focal builds, one case per block. These lines
+# are the security boundary in its most readable form: everything a remote host
+# receives is here, in this order, and nothing else. A diff in this file is a
+# change to what Focal can run, so it is meant to be reviewed by reading.
+#
+# Shape: ssh -n -T -o BatchMode=yes [-i key] [-p port] -- <target> [sudo -n] <program> <args...>
+#
+# "--" appears exactly once, immediately before the target, so a destination
+# that somehow began with "-" is still an operand rather than an option. It is
+# deliberately absent before the remote command: ssh sends everything after the
+# destination to the remote host verbatim, and a literal "--" there would be
+# passed on as the program name.
+
+# plain
+ssh -n -T -o BatchMode=yes -- example.com uptime
+
+# user in target
+ssh -n -T -o BatchMode=yes -- ops@example.com uptime
+
+# identity file
+ssh -n -T -o BatchMode=yes -i /home/focal/.ssh/id_ed25519 -- example.com uptime
+
+# port
+ssh -n -T -o BatchMode=yes -p 2222 -- example.com uptime
+
+# identity file and port
+ssh -n -T -o BatchMode=yes -i /home/focal/.ssh/id_ed25519 -p 2222 -- ops@example.com uptime
+
+# ipv6 target
+ssh -n -T -o BatchMode=yes -- ops@[2001:db8::1] uptime
+
+# sudo prefix
+ssh -n -T -o BatchMode=yes -- example.com sudo -n uptime
+
+# command arguments
+ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service
+
+# sudo prefix with command arguments
+ssh -n -T -o BatchMode=yes -i /home/focal/.ssh/id_ed25519 -p 2222 -- ops@example.com sudo -n systemctl show nginx.service
