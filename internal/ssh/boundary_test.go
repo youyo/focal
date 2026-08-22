@@ -14,9 +14,12 @@ import (
 // allowedCommandFactories lists the exported functions this package may expose
 // that hand a Command to another package. Every entry widens Focal's security
 // boundary by one command, so the list is meant to be read as the complete
-// catalogue of what a caller outside internal/ssh can ever run. It is empty
-// until commands.go introduces the first factory.
-var allowedCommandFactories = []string{}
+// catalogue of what a caller outside internal/ssh can ever run. Adding a
+// factory to commands.go without adding it here fails the tests, which is the
+// point: the catalogue is what a reviewer reads instead of the whole package.
+var allowedCommandFactories = []string{
+	"UptimeCommand",
+}
 
 // The asserts below read this package's own source with go/ast rather than
 // exercising it through its API, because what has to hold is the absence of a
