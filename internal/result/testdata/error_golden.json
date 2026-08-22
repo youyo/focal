@@ -1,0 +1,1 @@
+{"kind":"validation","code":"invalid_target","message":"target must not be empty","field":"target","allowed":["user@host"]}
