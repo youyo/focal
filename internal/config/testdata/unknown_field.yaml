@@ -1,0 +1,5 @@
+# max_outputs is not a field Focal knows. A typo that silently keeps the
+# default limit is a security-relevant surprise, so decoding rejects it.
+execution:
+  timeout: 30s
+  max_outputs: 10MiB

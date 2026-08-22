@@ -1,0 +1,7 @@
+# logs may run unprivileged or escalate on denial (never|auto). Starting every
+# journal read as root is outside its capability, so Focal must refuse to start
+# rather than quietly downgrade this to auto.
+operations:
+  logs:
+    enabled: true
+    sudo: always
