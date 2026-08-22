@@ -1,8 +1,10 @@
 # Focal
 
+> Give coding agents visibility, not shell access.
+
 **Focal never accepts arbitrary remote commands.**
 
-Focal exposes a fixed set of structured inspection operations and executes them through your existing OpenSSH configuration.
+Focal exposes a fixed set of structured inspection operations and executes them through your existing OpenSSH configuration. Focal does not replace SSH configuration — it constrains what may be executed through SSH.
 
 Focal は Coding Agent 向けの制限付き SSH 検査ツールです。Agent が制御できるのは「どの host を見るか」「どの built-in operation を使うか」「その operation が明示的に公開した型付き parameter」だけで、実際の Linux コマンドは一切制御できません。出力は Coding Agent が消費しやすい構造化 JSON を既定とします。
 
