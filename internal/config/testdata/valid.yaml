@@ -1,0 +1,18 @@
+execution:
+  timeout: 45s
+  max_output: 4MiB
+  port: 2222
+
+operations:
+  system:
+    enabled: true
+  cpu:
+    enabled: false
+  logs:
+    enabled: true
+    sudo: auto
+    max_lines: 500
+    max_since: 12h
+  kernel:
+    enabled: true
+    sudo: never
