@@ -1,0 +1,19 @@
+[tools]
+go = "1.26"
+golangci-lint = "latest"
+
+[tasks.build]
+description = "Build all packages"
+run = "go build ./..."
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.fmt]
+description = "Format code"
+run = "gofmt -w ."
