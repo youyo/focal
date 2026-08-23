@@ -292,15 +292,16 @@ func TestNoEscapeHatch(t *testing.T) {
 		}
 	})
 
-	t.Run("no subcommands", func(t *testing.T) {
+	t.Run("only serve as a subcommand", func(t *testing.T) {
 		var g globals
 		cmd := (&app{stdout: io.Discard, stderr: io.Discard}).newRootCommand(&g)
-		if subs := cmd.Commands(); len(subs) != 0 {
-			names := make([]string, 0, len(subs))
-			for _, sub := range subs {
-				names = append(names, sub.Name())
-			}
-			t.Fatalf("root has subcommands %v, want none", names)
+		subs := cmd.Commands()
+		names := make([]string, 0, len(subs))
+		for _, sub := range subs {
+			names = append(names, sub.Name())
+		}
+		if !slices.Equal(names, []string{"serve"}) {
+			t.Fatalf("root has subcommands %v, want [serve]", names)
 		}
 	})
 }
@@ -546,18 +547,72 @@ func TestMissingArgumentsIsUsageError(t *testing.T) {
 	}
 }
 
-func TestConfigFlagReportsWhereConfigIsRead(t *testing.T) {
+// TestConfigFlagReadsTheNamedFileInsteadOfTheDefaultLocation proves --config
+// is not just accepted but actually consulted: the default XDG location
+// leaves kernel disabled, while the file --config names enables it, and the
+// run is only let through when the flag is honoured.
+func TestConfigFlagReadsTheNamedFileInsteadOfTheDefaultLocation(t *testing.T) {
+	withConfig(t, "") // default location: kernel stays disabled
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "other.yaml")
+	if err := os.WriteFile(path, []byte("operations:\n  kernel:\n    enabled: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	res := runCLI(t, "--config", path, "prod-web", "kernel")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitOK, res.stderr)
+	}
+	if len(res.calls) != 1 {
+		t.Fatalf("recorded %d calls, want 1", len(res.calls))
+	}
+}
+
+// TestConfigFlagRejectsAnUnreadablePath and TestConfigFlagRejectsInvalidYAML
+// pin that a bad --config path or a malformed file leaves through the same
+// structured errors Load already produces for the default location.
+func TestConfigFlagRejectsAnUnreadablePath(t *testing.T) {
 	withConfig(t, "")
 
-	res := runCLI(t, "--config", "/tmp/other.yaml", "prod-web", "system")
-	if res.code != exitUsage {
-		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitUsage, res.stderr)
+	res := runCLI(t, "--config", t.TempDir(), "prod-web", "system")
+	if res.code != exitRejected {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitRejected, res.stderr)
 	}
 	got := decodeError(t, res)
-	if got.Code != "config_path_unsupported" {
-		t.Fatalf("code = %q, want %q", got.Code, "config_path_unsupported")
+	if got.Code != "unreadable_config" {
+		t.Fatalf("code = %q, want %q", got.Code, "unreadable_config")
 	}
-	if len(got.Allowed) == 0 {
-		t.Fatal("the error does not say where the configuration is read from")
+}
+
+func TestConfigFlagRejectsInvalidYAML(t *testing.T) {
+	withConfig(t, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("operations:\n  kernel: [not-a-map]\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	res := runCLI(t, "--config", path, "prod-web", "system")
+	if res.code != exitRejected {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitRejected, res.stderr)
+	}
+	got := decodeError(t, res)
+	if got.Code != "invalid_yaml" {
+		t.Fatalf("code = %q, want %q", got.Code, "invalid_yaml")
+	}
+}
+
+// TestServeIsReachableAsASubcommand pins the wiring itself: `focal serve` must
+// route to the serve subcommand rather than being read as HOST=serve with a
+// missing operation.
+func TestServeIsReachableAsASubcommand(t *testing.T) {
+	res := runCLI(t, "serve", "--help")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitOK, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "focal serve exposes") {
+		t.Fatalf("stdout = %q, want the serve command's help text", res.stdout)
 	}
 }

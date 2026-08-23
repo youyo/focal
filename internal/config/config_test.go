@@ -369,6 +369,76 @@ func TestLoadRejectsOversizedConfigFile(t *testing.T) {
 	wantError(t, err, result.KindValidation, "config_too_large")
 }
 
+// TestLoadFromReadsTheGivenPathInsteadOfTheDefaultLocation pins the one thing
+// that differs from Load: where the file is found. Everything the default
+// location's file would trigger, an explicit path triggers identically.
+func TestLoadFromReadsTheGivenPathInsteadOfTheDefaultLocation(t *testing.T) {
+	isolate(t) // no file at the default location at all
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "explicit.yaml")
+	if err := os.WriteFile(path, []byte("operations:\n  kernel:\n    enabled: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom() returned error: %v", err)
+	}
+	op := mustOperation(t, cfg, "kernel")
+	if !op.Enabled() {
+		t.Fatal("kernel is not enabled; LoadFrom did not read the given path")
+	}
+}
+
+// TestLoadFromWithNoFileAtThePathUsesSafeDefaults mirrors
+// TestLoadWithoutConfigFileUsesSafeDefaults: an explicit path that names
+// nothing is not an error, the same way an absent default-location file is
+// not.
+func TestLoadFromWithNoFileAtThePathUsesSafeDefaults(t *testing.T) {
+	isolate(t)
+
+	cfg, err := LoadFrom(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFrom() returned error: %v", err)
+	}
+	if got := cfg.Timeout(); got != 30*time.Second {
+		t.Errorf("Timeout() = %v, want the 30s default", got)
+	}
+}
+
+// TestLoadFromAppliesTheSameChecksAsLoad pins that a bad path (a directory,
+// not a file) and invalid YAML fail LoadFrom exactly as they would fail Load
+// against the default location.
+func TestLoadFromAppliesTheSameChecksAsLoad(t *testing.T) {
+	isolate(t)
+
+	t.Run("not a regular file", func(t *testing.T) {
+		_, err := LoadFrom(t.TempDir())
+		wantError(t, err, result.KindValidation, "unreadable_config")
+	})
+
+	t.Run("invalid yaml", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "bad.yaml")
+		if err := os.WriteFile(path, []byte("operations:\n  kernel: [not-a-map]\n"), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, err := LoadFrom(path)
+		wantError(t, err, result.KindValidation, "invalid_yaml")
+	})
+
+	t.Run("writable by others", func(t *testing.T) {
+		path := writeConfigAt(t, t.TempDir(), "execution:\n  timeout: 30s\n")
+		mode := os.FileMode(0o666)
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		_, err := LoadFrom(path)
+		wantError(t, err, result.KindValidation, "insecure_config_permissions")
+	})
+}
+
 // TestIdentityFilePermissions accepts a private key only when it is private,
 // and expands a leading ~/ the way OpenSSH does so the check sees the real file.
 func TestIdentityFilePermissions(t *testing.T) {

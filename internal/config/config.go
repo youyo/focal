@@ -119,6 +119,16 @@ func Load() (Config, *result.Error) {
 	if err != nil {
 		return Config{}, err
 	}
+	return LoadFrom(path)
+}
+
+// LoadFrom reads and validates the config file at path instead of the default
+// XDG location. Every check besides how the path was found — existence, size,
+// permissions, YAML well-formedness, the operation and capability checks — is
+// identical to Load, including that a path with nothing at it is not an
+// error: it yields the same safe-side defaults an absent default-location file
+// would.
+func LoadFrom(path string) (Config, *result.Error) {
 	data, err := readConfigFile(path)
 	if err != nil {
 		return Config{}, err
