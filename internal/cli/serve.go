@@ -62,6 +62,7 @@ type serveOptions struct {
 	allowUnauthenticated bool
 	identities           []string
 	user                 string
+	config               string
 }
 
 // newServeCommand builds the serve subcommand. Its flags describe where to
@@ -97,6 +98,7 @@ func newServeCommand(a *app) *cobra.Command {
 	flags.StringArrayVar(&o.identities, "identity", nil,
 		"register a private key as alias=path, repeatable; a tool call may name only the alias")
 	flags.StringVar(&o.user, "user", "", "default user to log in as, when a tool call and its host name none")
+	flags.StringVar(&o.config, "config", "", "configuration file to read instead of the default location")
 
 	return cmd
 }
@@ -130,7 +132,7 @@ type serveHandler struct {
 // serveHandler loads the configuration, registers the identity aliases and
 // builds the MCP handler over them.
 func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
-	cfg, cfgErr := config.Load()
+	cfg, cfgErr := loadConfigFrom(o.config)
 	if cfgErr != nil {
 		return nil, rejected(cfgErr)
 	}
