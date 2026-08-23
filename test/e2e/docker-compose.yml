@@ -1,0 +1,14 @@
+# The sshd fixture for the E2E suite. The harness drives this file with a
+# per-run project name (docker compose -p) so concurrent or leftover runs never
+# collide, injects the generated public key through FOCAL_E2E_PUBKEY, and lets
+# docker pick an ephemeral loopback host port (127.0.0.1::22) which it then
+# reads back with `docker compose port`.
+services:
+  sshd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PUBKEY: ${FOCAL_E2E_PUBKEY:?FOCAL_E2E_PUBKEY must be set by the harness}
+    ports:
+      - "127.0.0.1::22"
