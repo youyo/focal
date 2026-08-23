@@ -1,0 +1,10 @@
+{
+  "step": "s10-docs",
+  "attempt": 1,
+  "branch": "voyager/focal02/s10-docs-a1",
+  "base_sha": "ee0f04a12a36912be16f466486a932a1a8e9dd23",
+  "head_sha": "7f609d264e7e3808d3c5065a4447337c6fef3bb8",
+  "tests": "green",
+  "stop_flag": false,
+  "notes": "README + ADR 0004/0005 written from actual implementation; go build ./... green"
+}
