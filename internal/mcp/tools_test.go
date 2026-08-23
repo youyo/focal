@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/youyo/focal/internal/operation"
+	"github.com/youyo/focal/internal/result"
 )
 
 // TestPackageDoesNotImportSSH is the import boundary this package is built
@@ -240,6 +241,46 @@ func TestResolveTargetLayersTheLoginUser(t *testing.T) {
 			}
 			if got.String() != tt.want {
 				t.Errorf("target = %q, want %q", got.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestProcessesArgsRejectInjection closes the MCP-boundary gap
+// TestValidationErrorIsAToolErrorNotAProtocolError and
+// TestHostIsNotAllowlistedButIsValidated leave open: those exercise the
+// ServiceName and Target(host) parameters end-to-end through inspect_logs and
+// inspect_system, but no test in this package had ever called inspect_processes
+// with an injection payload in its name or pid arguments. ProcessName and PID
+// are the two remaining reject types issue #15 names, and this tool is the
+// only one that exposes either from the wire.
+func TestProcessesArgsRejectInjection(t *testing.T) {
+	url, runner := serverFor(t, "", Options{})
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"process name with a command separator", map[string]any{"host": "web", "name": "nginx;id"}},
+		{"process name with a substitution", map[string]any{"host": "web", "name": "$(id)"}},
+		{"process name with a traversal", map[string]any{"host": "web", "name": "../../etc/passwd"}},
+		{"process name with embedded whitespace", map[string]any{"host": "web", "name": "nginx id"}},
+		{"pid above its own bound", map[string]any{"host": "web", "pid": 4194305}},
+		{"pid as a negative number", map[string]any{"host": "web", "pid": -1000}},
+		{"pid as zero", map[string]any{"host": "web", "pid": 0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, url, "inspect_processes", tc.args)
+			if !res.IsError {
+				t.Fatalf("%+v was accepted", tc.args)
+			}
+			got := toolErrorOf(t, res)
+			if got.Kind != result.KindValidation {
+				t.Errorf("kind = %q, want %q", got.Kind, result.KindValidation)
+			}
+			if len(runner.calls) != 0 {
+				t.Errorf("a rejected input still reached the runner: %+v", runner.calls)
 			}
 		})
 	}
