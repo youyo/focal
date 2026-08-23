@@ -15,3 +15,13 @@ jobs:
       - run: mise run test
       - run: mise run test-race
       - run: mise run lint
+
+  e2e:
+    # The end-to-end suite drives focal against a real sshd container, so it
+    # needs docker (preinstalled on ubuntu-latest) and stays a separate job from
+    # the docker-free build/test/lint above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: mise run e2e
