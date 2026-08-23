@@ -10,6 +10,10 @@ run = "go build ./..."
 description = "Run all tests"
 run = "go test ./..."
 
+[tasks.test-race]
+description = "Run all tests with the race detector"
+run = "go test -race ./..."
+
 [tasks.lint]
 description = "Run golangci-lint"
 run = "golangci-lint run ./..."

@@ -402,6 +402,12 @@ func TestInjectionInputsAreRejected(t *testing.T) {
 		{"target with an ssh_config expansion token", []string{"prod-%h", "system"}, ""},
 		{"lines above the configured ceiling", []string{"prod-web", "logs", "nginx", "--lines", "900"}, "lines_above_max"},
 		{"since above the value object's own bound", []string{"prod-web", "logs", "nginx", "--since", "99d"}, ""},
+		{"process name with a command separator", []string{"prod-web", "processes", "--name", "nginx;id"}, ""},
+		{"process name with a substitution", []string{"prod-web", "processes", "--name", "$(id)"}, ""},
+		{"process name with a traversal", []string{"prod-web", "processes", "--name", "../../etc/passwd"}, ""},
+		{"pid with a command separator", []string{"prod-web", "processes", "--pid", "1;id"}, ""},
+		{"pid with a leading hyphen", []string{"prod-web", "processes", "--pid", "-1000"}, ""},
+		{"pid above its own bound", []string{"prod-web", "processes", "--pid", "4194305"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
