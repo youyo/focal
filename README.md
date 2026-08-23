@@ -226,7 +226,7 @@ services:
     environment:
       EXTERNAL_URL: https://focal.example.com
       UPSTREAM_URL: http://focal:8080
-      UPSTREAM_AUTH_HEADER: "Bearer <FOCAL_UPSTREAM_TOKEN の値>"   # idproxy #33/#34 対応後に有効
+      UPSTREAM_AUTH_TOKEN: "<FOCAL_UPSTREAM_TOKEN と同じ値>"   # idproxy 側が Authorization: Bearer として注入
     # OIDC プロバイダの設定等は idproxy 側のドキュメントを参照
 
   focal:
