@@ -591,6 +591,28 @@ func TestConfigFlagRejectsAnUnreadablePath(t *testing.T) {
 	}
 }
 
+// TestConfigFlagRejectsAMissingPath pins that a --config path with nothing at
+// it is a structured error, not a silent fall-back to the safe defaults: a
+// typo in the flag must be reported rather than run under an unintended
+// policy. This is unlike the default XDG location, which withConfig(t, "")
+// already exercises (see TestConfigFlagReadsTheNamedFileInsteadOfTheDefaultLocation).
+func TestConfigFlagRejectsAMissingPath(t *testing.T) {
+	withConfig(t, "")
+
+	path := filepath.Join(t.TempDir(), "typo.yaml")
+	res := runCLI(t, "--config", path, "prod-web", "system")
+	if res.code != exitRejected {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitRejected, res.stderr)
+	}
+	got := decodeError(t, res)
+	if got.Code != "config_not_found" {
+		t.Fatalf("code = %q, want %q", got.Code, "config_not_found")
+	}
+	if !strings.Contains(got.Message, path) {
+		t.Fatalf("message %q does not mention the missing path %q", got.Message, path)
+	}
+}
+
 func TestConfigFlagRejectsInvalidYAML(t *testing.T) {
 	withConfig(t, "")
 
