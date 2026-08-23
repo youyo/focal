@@ -391,19 +391,19 @@ func TestLoadFromReadsTheGivenPathInsteadOfTheDefaultLocation(t *testing.T) {
 	}
 }
 
-// TestLoadFromWithNoFileAtThePathUsesSafeDefaults mirrors
-// TestLoadWithoutConfigFileUsesSafeDefaults: an explicit path that names
-// nothing is not an error, the same way an absent default-location file is
-// not.
-func TestLoadFromWithNoFileAtThePathUsesSafeDefaults(t *testing.T) {
+// TestLoadFromWithNoFileAtThePathIsAStructuredError pins that an explicitly
+// named path is a promise: if nothing is there, that is a mistake worth
+// surfacing (most often a typo) rather than a silent fall-back to defaults.
+// This is unlike Load, whose default-location lookup treats "nothing here" as
+// the normal, unconfigured case.
+func TestLoadFromWithNoFileAtThePathIsAStructuredError(t *testing.T) {
 	isolate(t)
 
-	cfg, err := LoadFrom(filepath.Join(t.TempDir(), "missing.yaml"))
-	if err != nil {
-		t.Fatalf("LoadFrom() returned error: %v", err)
-	}
-	if got := cfg.Timeout(); got != 30*time.Second {
-		t.Errorf("Timeout() = %v, want the 30s default", got)
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+	_, err := LoadFrom(path)
+	wantError(t, err, result.KindValidation, "config_not_found")
+	if !strings.Contains(err.Message, path) {
+		t.Errorf("error message %q does not mention the missing path %q", err.Message, path)
 	}
 }
 

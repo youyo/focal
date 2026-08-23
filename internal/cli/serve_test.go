@@ -301,6 +301,24 @@ func TestServeConfigFlagRejectsAnUnreadablePath(t *testing.T) {
 	}
 }
 
+// TestServeConfigFlagRejectsAMissingPath mirrors
+// TestConfigFlagRejectsAMissingPath for `focal serve --config`: a path with
+// nothing at it is a config_not_found error, not a silent fall-back to the
+// safe defaults.
+func TestServeConfigFlagRejectsAMissingPath(t *testing.T) {
+	withConfig(t, "")
+	s := newServeApp(t)
+
+	path := filepath.Join(t.TempDir(), "typo.yaml")
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path})
+	if err == nil {
+		t.Fatal("a missing --config path was accepted")
+	}
+	if err.err.Code != "config_not_found" {
+		t.Errorf("code = %q, want %q", err.err.Code, "config_not_found")
+	}
+}
+
 func TestServeConfigFlagRejectsInvalidYAML(t *testing.T) {
 	withConfig(t, "")
 	s := newServeApp(t)

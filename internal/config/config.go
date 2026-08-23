@@ -119,17 +119,22 @@ func Load() (Config, *result.Error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return LoadFrom(path)
+	return loadFrom(path, false)
 }
 
-// LoadFrom reads and validates the config file at path instead of the default
-// XDG location. Every check besides how the path was found — existence, size,
+// LoadFrom reads and validates the config file at an explicitly named path,
+// such as --config. Every check besides how the path was found — size,
 // permissions, YAML well-formedness, the operation and capability checks — is
-// identical to Load, including that a path with nothing at it is not an
-// error: it yields the same safe-side defaults an absent default-location file
-// would.
+// identical to Load. Unlike Load's default-location lookup, a path named here
+// is a promise: nothing at it is a config_not_found error rather than a silent
+// fall-back to defaults, so a typo in --config is reported instead of running
+// on an unintended policy.
 func LoadFrom(path string) (Config, *result.Error) {
-	data, err := readConfigFile(path)
+	return loadFrom(path, true)
+}
+
+func loadFrom(path string, requireExists bool) (Config, *result.Error) {
+	data, err := readConfigFile(path, requireExists)
 	if err != nil {
 		return Config{}, err
 	}
@@ -159,10 +164,20 @@ func configPath() (string, *result.Error) {
 	return filepath.Join(home, ".config", "focal", "config.yaml"), nil
 }
 
-// readConfigFile returns nil, nil when there is no config file to read.
-func readConfigFile(path string) ([]byte, *result.Error) {
+// readConfigFile returns nil, nil when there is no config file to read and
+// requireExists is false. When requireExists is true — an explicitly named
+// path such as --config — a missing file is instead a config_not_found error,
+// since a path the caller typed is a promise that something is there.
+func readConfigFile(path string, requireExists bool) ([]byte, *result.Error) {
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		if requireExists {
+			return nil, result.ValidationError(
+				"config_not_found",
+				fmt.Sprintf("no config file at %s", path),
+				"", nil,
+			)
+		}
 		return nil, nil
 	}
 	if err != nil {
