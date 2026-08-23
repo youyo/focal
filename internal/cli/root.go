@@ -341,9 +341,19 @@ func asResultError(err error) *result.Error {
 	return result.ExecutionError("operation_failed", err.Error())
 }
 
-// buildVersion reports the module version embedded by the Go toolchain, or
-// "devel" when that information is not available (e.g. `go run`).
+// version is embedded by GoReleaser via -ldflags "-X ...cli.version={{ .Version }}"
+// at release build time. It is empty for any build that did not pass that
+// flag (go build, go run, go test), which is what sends buildVersion to its
+// debug.ReadBuildInfo fallback below.
+var version string
+
+// buildVersion reports the version GoReleaser embedded at release build time,
+// the module version embedded by the Go toolchain when that is not available,
+// or "devel" when neither is (e.g. `go run`).
 func buildVersion() string {
+	if version != "" {
+		return version
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "devel"

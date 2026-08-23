@@ -97,6 +97,36 @@ func decodeEnvelope(t *testing.T, res runResult) result.Envelope {
 	return env
 }
 
+func TestBuildVersion(t *testing.T) {
+	tests := []struct {
+		name         string
+		injected     string
+		wantInjected bool
+	}{
+		{name: "ldflags-embedded version wins", injected: "v1.2.3", wantInjected: true},
+		{name: "empty falls back to build info", injected: "", wantInjected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := version
+			version = tt.injected
+			t.Cleanup(func() { version = original })
+
+			got := buildVersion()
+			if tt.wantInjected {
+				if got != tt.injected {
+					t.Fatalf("buildVersion() = %q, want %q", got, tt.injected)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("buildVersion() = \"\", want a non-empty fallback")
+			}
+		})
+	}
+}
+
 func TestExecute_Version(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Execute([]string{"--version"}, &stdout, &stderr)
