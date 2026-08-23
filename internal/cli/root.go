@@ -147,7 +147,20 @@ func (a *app) newRootCommand(g *globals) *cobra.Command {
 	flags.BoolVar(&g.version, "version", false, "print the version and exit")
 	cmd.MarkFlagsMutuallyExclusive("json", "pretty")
 
+	cmd.AddCommand(newServeCommand(a))
+
 	return cmd
+}
+
+// loadConfig reads focal's configuration from --config when the caller named
+// one, or from the default XDG location otherwise. Every other check —
+// existence, size, permissions, YAML well-formedness, capability resolution —
+// is identical either way; only where the file is looked up changes.
+func loadConfig(g *globals) (config.Config, *result.Error) {
+	if g.config != "" {
+		return config.LoadFrom(g.config)
+	}
+	return config.Load()
 }
 
 // dispatch is one invocation: read the command line, load the configuration,
@@ -161,14 +174,6 @@ func (a *app) dispatch(cmd *cobra.Command, g *globals, args []string) *cliError 
 	if g.version {
 		fmt.Fprintln(a.stdout, buildVersion())
 		return nil
-	}
-	if g.config != "" {
-		return usageError(
-			"config_path_unsupported",
-			"focal reads its configuration from a fixed location and cannot yet be pointed at another file",
-			"config",
-			[]string{"$XDG_CONFIG_HOME/focal/config.yaml", "~/.config/focal/config.yaml"},
-		)
 	}
 	if len(args) < 2 {
 		return usageError(
@@ -188,7 +193,7 @@ func (a *app) dispatch(cmd *cobra.Command, g *globals, args []string) *cliError 
 		)
 	}
 
-	cfg, cfgErr := config.Load()
+	cfg, cfgErr := loadConfig(g)
 	if cfgErr != nil {
 		return rejected(cfgErr)
 	}
