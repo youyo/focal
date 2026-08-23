@@ -19,6 +19,25 @@ import (
 // point: the catalogue is what a reviewer reads instead of the whole package.
 var allowedCommandFactories = []string{
 	"UptimeCommand",
+	"UnameCommand",
+	"HostnameCommand",
+	"DateCommand",
+	"OSReleaseCommand",
+	"LSCPUCommand",
+	"LoadAvgCommand",
+	"FreeCommand",
+	"MemInfoCommand",
+	"DFCommand",
+	"LSBLKCommand",
+	"FindMntCommand",
+	"IPAddrCommand",
+	"IPRouteCommand",
+	"SocketStatsCommand",
+	"ResolvConfCommand",
+	"ProcessListCommand",
+	"ServiceStatusCommand",
+	"LogsCommand",
+	"KernelLogsCommand",
 }
 
 // The asserts below read this package's own source with go/ast rather than
@@ -149,6 +168,58 @@ func TestNoOtherExportedCommandSurface(t *testing.T) {
 						ts.Name.Name, types.ExprString(f.Type))
 				}
 			}
+		}
+	}
+}
+
+// literalTokenConstructors are the token constructors whose first argument is
+// the part of an argv that comes from Focal rather than from a caller. Writing
+// that part as anything but a quoted string in this package's own source —
+// a variable, a parameter, a concatenation — would mean a token nobody can read
+// off the page, which is exactly what the golden files exist to prevent.
+var literalTokenConstructors = []string{"lit", "prefixed"}
+
+func TestTokenLiteralsAreSourceLiterals(t *testing.T) {
+	for _, f := range packageFiles(t) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || !slices.Contains(literalTokenConstructors, id.Name) {
+				return true
+			}
+			if len(call.Args) == 0 {
+				t.Errorf("%s() is called with no arguments", id.Name)
+				return true
+			}
+			bl, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || bl.Kind != token.STRING {
+				t.Errorf("%s(%s, ...): the literal part of a token must be written as a quoted string here, so that the golden argv files record every token Focal can send",
+					id.Name, types.ExprString(call.Args[0]))
+			}
+			return true
+		})
+	}
+}
+
+// TestExportedFactoryParametersAreTypedValues closes the other half of the
+// boundary. A factory that accepted a string, an int or an interface would let
+// a caller decide the bytes of an argv directly; requiring a value object means
+// internal/vo has already accepted whatever arrives here.
+func TestExportedFactoryParametersAreTypedValues(t *testing.T) {
+	for _, fn := range funcDecls(packageFiles(t)) {
+		if fn.Recv != nil || !fn.Name.IsExported() || !resultsMentionCommand(fn) {
+			continue
+		}
+		for _, p := range fn.Type.Params.List {
+			rendered := types.ExprString(p.Type)
+			if rendered == "policy.Policy" || strings.HasPrefix(rendered, "vo.") {
+				continue
+			}
+			t.Errorf("exported factory %s takes a %s: a factory parameter must be policy.Policy or a value object from internal/vo, so that nothing reaches an argv without having been parsed",
+				fn.Name.Name, rendered)
 		}
 	}
 }

@@ -25,10 +25,10 @@ func argvCases(t *testing.T) []struct {
 } {
 	t.Helper()
 	uptime := mustCommand(t, "uptime")
-	systemctl := mustCommand(t, "systemctl", "show", "nginx.service")
+	systemctl := mustCommand(t, "systemctl", lit("show"), val("nginx.service"))
 	keyAndPort := Options{IdentityFile: "/home/focal/.ssh/id_ed25519", Port: 2222}
 
-	return []struct {
+	cases := []struct {
 		name   string
 		opts   Options
 		target string
@@ -45,6 +45,20 @@ func argvCases(t *testing.T) []struct {
 		{name: "command arguments", target: "example.com", cmd: systemctl},
 		{name: "sudo prefix with command arguments", opts: keyAndPort, target: "ops@example.com", cmd: systemctl, sudo: true},
 	}
+
+	// Every factory in the catalogue also appears as the whole command line it
+	// causes, so the golden file reads as the complete list of what any host
+	// can be asked to run rather than as a sample of it.
+	for _, fc := range factoryCases(t) {
+		cases = append(cases, struct {
+			name   string
+			opts   Options
+			target string
+			cmd    Command
+			sudo   bool
+		}{name: fc.name, target: "example.com", cmd: fc.cmd})
+	}
+	return cases
 }
 
 func TestBuildArgvMatchesGolden(t *testing.T) {
@@ -78,15 +92,20 @@ func TestBuildArgvSeparatorAndOptions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			argv := buildArgv(tc.opts, tc.target, tc.cmd, tc.sudo)
 
-			if got := slices.Index(argv, "--"); got < 0 {
+			sep := slices.Index(argv, "--")
+			if sep < 0 {
 				t.Fatalf("argv has no %q separator: %v", "--", argv)
-			} else if argv[got+1] != tc.target {
-				t.Errorf("argv[%d] after %q is %q, want the target %q", got+1, "--", argv[got+1], tc.target)
+			} else if argv[sep+1] != tc.target {
+				t.Errorf("argv[%d] after %q is %q, want the target %q", sep+1, "--", argv[sep+1], tc.target)
 			}
 			if got := strings.Count(strings.Join(argv, " "), " -- "); got != 1 {
 				t.Errorf("%q appears %d times, want exactly once (before the target and nowhere else): %v", "--", got, argv)
 			}
-			for i, tok := range argv {
+			// Only the tokens before the separator are ssh's own options. A
+			// "-o" after it belongs to the remote program — lsblk takes one —
+			// and reading it as an ssh option would be reading the argv the
+			// way neither ssh nor the remote host does.
+			for i, tok := range argv[:sep] {
 				if tok == "-o" && argv[i+1] != "BatchMode=yes" {
 					t.Errorf("argv passes -o %q: BatchMode=yes is the only option Focal sets", argv[i+1])
 				}
@@ -171,11 +190,11 @@ func readGoldenArgv(t *testing.T) map[string]string {
 
 // mustCommand builds a Command the way a factory would, for tests that care
 // about the argv rather than about validation.
-func mustCommand(t *testing.T, program string, args ...string) Command {
+func mustCommand(t *testing.T, program string, args ...argToken) Command {
 	t.Helper()
 	cmd, err := newCommand(policy.Policy{}, program, args...)
 	if err != nil {
-		t.Fatalf("newCommand(%q, %q): %v", program, args, err)
+		t.Fatalf("newCommand(%q, %v): %v", program, args, err)
 	}
 	return cmd
 }
