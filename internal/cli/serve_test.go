@@ -58,6 +58,21 @@ func TestServeListenDefaultsToLoopback(t *testing.T) {
 	}
 }
 
+// TestServeListenHelpOffersTheUnixSocketForm keeps the second thing --listen
+// accepts discoverable: an operator reading the help has no other way to learn
+// the socket form exists.
+func TestServeListenHelpOffersTheUnixSocketForm(t *testing.T) {
+	cmd := newServeCommand(newServeApp(t).app)
+
+	usage := cmd.Flags().Lookup("listen").Usage
+	if !strings.Contains(usage, unixListenScheme) {
+		t.Errorf("--listen usage = %q, want it to offer the %s form", usage, unixListenScheme)
+	}
+	if !strings.Contains(cmd.Long, unixListenScheme) {
+		t.Errorf("serve's description does not mention the %s form:\n%s", unixListenScheme, cmd.Long)
+	}
+}
+
 // TestListenAddressPolicy is focal serve's safe-side default stated as a
 // table: focal has no authentication of its own, so it will only bind where
 // nothing but this machine can reach it unless the operator says otherwise.
@@ -171,6 +186,13 @@ func serveHost(t *testing.T, s *serveApp, o serveOptions) string {
 // the decoded result.
 func callTool(t *testing.T, url, tool string, args map[string]any) (content string, isError bool) {
 	t.Helper()
+	return callToolWith(t, http.DefaultClient, url, tool, args)
+}
+
+// callToolWith is callTool over a client of the caller's own, which is how a
+// test reaches focal somewhere the default client cannot dial.
+func callToolWith(t *testing.T, client *http.Client, url, tool string, args map[string]any) (content string, isError bool) {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -198,7 +220,7 @@ func callTool(t *testing.T, url, tool string, args map[string]any) (content stri
 	req.Header.Set("Mcp-Method", "tools/call")
 	req.Header.Set("Mcp-Name", tool)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
