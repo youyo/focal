@@ -22,14 +22,21 @@ const (
 	// Anchor and alias expansion turns a small file into a large object
 	// graph, so the ceiling has to be applied to the bytes on disk.
 	maxConfigBytes = 1 << 20
-
-	// logsOperation is the only operation that reads a stream long enough
-	// to need line and age limits.
-	logsOperation = "logs"
-
-	defaultLogsMaxLines = "1000"
-	defaultLogsMaxSince = "24h"
 )
+
+// lineStreamLimits declares which operations read a stream long enough to need
+// line and age limits, and the ceilings Focal applies when the config file
+// names none. Membership is the whole rule: an operation listed here accepts
+// max_lines and max_since, and one that is absent rejects both keys rather than
+// ignoring them, so the two journal readers are the only place those limits can
+// be set.
+var lineStreamLimits = map[string]struct {
+	maxLines string
+	maxSince string
+}{
+	"logs":   {maxLines: "1000", maxSince: "24h"},
+	"kernel": {maxLines: "1000", maxSince: "24h"},
+}
 
 // defaultOperations is what Focal runs with when no config file exists: every
 // read-only inspection available, kernel details off, and — because no row
@@ -53,4 +60,5 @@ var defaultOperations = []struct {
 	{"service", true},
 	{"logs", true},
 	{"kernel", false},
+	{"inspect", true},
 }

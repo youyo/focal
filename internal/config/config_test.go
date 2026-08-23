@@ -3,12 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/youyo/focal/internal/policy"
 	"github.com/youyo/focal/internal/result"
+	"github.com/youyo/focal/internal/vo"
 )
 
 // isolate points Load at an empty, private config root and home directory so a
@@ -93,7 +95,7 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 		t.Errorf("IdentityFile() = %q, want empty", got)
 	}
 
-	readOnly := []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "logs"}
+	readOnly := []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "logs", "inspect"}
 	for _, name := range readOnly {
 		op := mustOperation(t, cfg, name)
 		if !op.Enabled() {
@@ -115,12 +117,91 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 		t.Errorf("kernel: Sudo() = %v, want never", got)
 	}
 
-	logs := mustOperation(t, cfg, "logs")
-	if got := logs.MaxLines().String(); got != "1000" {
-		t.Errorf("logs MaxLines() = %q, want 1000", got)
+	// logs and kernel are the two journal readers, and both carry the same
+	// default ceilings on how much journal one call may pull.
+	for _, name := range []string{"logs", "kernel"} {
+		op := mustOperation(t, cfg, name)
+		if got := op.MaxLines().String(); got != "1000" {
+			t.Errorf("%s MaxLines() = %q, want 1000", name, got)
+		}
+		if got := op.MaxSince().String(); got != "24h" {
+			t.Errorf("%s MaxSince() = %q, want 24h", name, got)
+		}
 	}
-	if got := logs.MaxSince().String(); got != "24h" {
-		t.Errorf("logs MaxSince() = %q, want 24h", got)
+
+	// Every other operation reads no line stream and carries no such limit.
+	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "inspect"} {
+		op := mustOperation(t, cfg, name)
+		if got := op.MaxLines(); got != (vo.LineLimit{}) {
+			t.Errorf("%s MaxLines() = %q, want the zero value", name, got.String())
+		}
+		if got := op.MaxSince(); got != (vo.Duration{}) {
+			t.Errorf("%s MaxSince() = %q, want the zero value", name, got.String())
+		}
+	}
+}
+
+// TestLoadWithoutConfigFileOffersEveryDeclaredOperation is the drift check on
+// the row count: an unconfigured Focal offers exactly the ten operations it
+// implements, no more and no fewer.
+func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
+	isolate(t)
+	cfg := mustLoad(t)
+
+	want := []string{
+		"system", "cpu", "memory", "storage", "network",
+		"processes", "service", "logs", "kernel", "inspect",
+	}
+	if got := len(cfg.operations); got != len(want) {
+		t.Errorf("Load() returned %d operations, want %d", got, len(want))
+	}
+	for _, name := range want {
+		if _, ok := cfg.Operation(name); !ok {
+			t.Errorf("Operation(%q) missing from a default config", name)
+		}
+	}
+	if _, ok := cfg.Operation("shell"); ok {
+		t.Error("Operation(\"shell\") reported present; only declared operations may exist")
+	}
+}
+
+// TestLoadRejectsSudoAlwaysForEveryOperation carries issue #11's startup rule
+// through the administrator-facing path: writing `sudo: always` under any of
+// the ten operations stops startup rather than quietly running unprivileged.
+func TestLoadRejectsSudoAlwaysForEveryOperation(t *testing.T) {
+	for _, d := range defaultOperations {
+		t.Run(d.name, func(t *testing.T) {
+			withConfig(t, "operations:\n  "+d.name+":\n    sudo: always\n")
+
+			_, err := Load()
+			wantError(t, err, result.KindPolicy, "sudo_not_allowed")
+			if err.Field != "operations."+d.name+".sudo" {
+				t.Errorf("Field = %q, want operations.%s.sudo", err.Field, d.name)
+			}
+		})
+	}
+}
+
+// TestLoadAcceptsSudoAutoForJournalOperationsOnly pins the other half of the
+// capability table as an administrator experiences it.
+func TestLoadAcceptsSudoAutoForJournalOperationsOnly(t *testing.T) {
+	journal := []string{"logs", "kernel"}
+	for _, d := range defaultOperations {
+		t.Run(d.name, func(t *testing.T) {
+			withConfig(t, "operations:\n  "+d.name+":\n    sudo: auto\n")
+
+			cfg, err := Load()
+			if !slices.Contains(journal, d.name) {
+				wantError(t, err, result.KindPolicy, "sudo_not_allowed")
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() returned error: %v", err)
+			}
+			if got := mustOperation(t, cfg, d.name).Policy().Sudo(); got != policy.SudoAuto {
+				t.Errorf("%s Sudo() = %v, want auto", d.name, got)
+			}
+		})
 	}
 }
 
@@ -150,6 +231,10 @@ func TestLoadValidTestdata(t *testing.T) {
 		t.Error("memory: Enabled() = false, want the default true")
 	}
 
+	if op := mustOperation(t, cfg, "inspect"); op.Enabled() {
+		t.Error("inspect: Enabled() = true, want false (disabled by the file)")
+	}
+
 	logs := mustOperation(t, cfg, "logs")
 	if got := logs.Policy().Sudo(); got != policy.SudoAuto {
 		t.Errorf("logs Sudo() = %v, want auto", got)
@@ -159,6 +244,17 @@ func TestLoadValidTestdata(t *testing.T) {
 	}
 	if got := logs.MaxSince().String(); got != "12h" {
 		t.Errorf("logs MaxSince() = %q, want 12h", got)
+	}
+
+	kernel := mustOperation(t, cfg, "kernel")
+	if got := kernel.Policy().Sudo(); got != policy.SudoAuto {
+		t.Errorf("kernel Sudo() = %v, want auto", got)
+	}
+	if got := kernel.MaxLines().String(); got != "300" {
+		t.Errorf("kernel MaxLines() = %q, want 300", got)
+	}
+	if got := kernel.MaxSince().String(); got != "6h" {
+		t.Errorf("kernel MaxSince() = %q, want 6h", got)
 	}
 }
 
@@ -377,7 +473,14 @@ func TestOperationValueValidation(t *testing.T) {
 		{name: "max_lines zero", body: "operations:\n  logs:\n    max_lines: 0\n", code: "invalid_line_limit", field: "operations.logs.max_lines"},
 		{name: "max_since above the value object bound", body: "operations:\n  logs:\n    max_since: 31d\n", code: "invalid_duration", field: "operations.logs.max_since"},
 		{name: "max_since in Go syntax the value object rejects", body: "operations:\n  logs:\n    max_since: 1h30m\n", code: "invalid_duration", field: "operations.logs.max_since"},
+		{name: "kernel max_lines is accepted", body: "operations:\n  kernel:\n    max_lines: 300\n"},
+		{name: "kernel max_since is accepted", body: "operations:\n  kernel:\n    max_since: 6h\n"},
+		{name: "kernel max_lines above the value object bound", body: "operations:\n  kernel:\n    max_lines: 100001\n", code: "invalid_line_limit", field: "operations.kernel.max_lines"},
+		{name: "kernel max_since above the value object bound", body: "operations:\n  kernel:\n    max_since: 31d\n", code: "invalid_duration", field: "operations.kernel.max_since"},
 		{name: "log limits on a non-log operation", body: "operations:\n  cpu:\n    max_lines: 10\n", code: "unsupported_operation_field", field: "operations.cpu.max_lines"},
+		{name: "max_since on a non-log operation", body: "operations:\n  system:\n    max_since: 1h\n", code: "unsupported_operation_field", field: "operations.system.max_since"},
+		{name: "log limits on the composite operation", body: "operations:\n  inspect:\n    max_lines: 10\n", code: "unsupported_operation_field", field: "operations.inspect.max_lines"},
+		{name: "log limits on service", body: "operations:\n  service:\n    max_since: 2h\n", code: "unsupported_operation_field", field: "operations.service.max_since"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -22,12 +22,15 @@ var capabilities = map[string][]SudoMode{
 	"service":   {SudoNever},
 
 	// journalctl may need privilege to read the system journal, so an
-	// administrator may opt into the escalate-only-on-denial mode. Starting
-	// every read as root (always) is not offered.
-	"logs": {SudoNever, SudoAuto},
+	// administrator may opt into the escalate-only-on-denial mode for either
+	// journal reader. Starting every read as root (always) is not offered.
+	"logs":   {SudoNever, SudoAuto},
+	"kernel": {SudoNever, SudoAuto},
 
-	// Kernel details are readable unprivileged; no sudo mode is offered.
-	"kernel": {SudoNever},
+	// inspect runs no remote command of its own: it composes the read-only
+	// operations above, and each of those is resolved through its own row, so
+	// the composite never carries privilege itself.
+	"inspect": {SudoNever},
 }
 
 // operationNames returns the declared operation names in sorted order, for

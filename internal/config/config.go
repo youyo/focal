@@ -333,12 +333,12 @@ func resolveIdentityFile(raw string) (string, *result.Error) {
 // SSH layer.
 func buildOperation(name string, enabled bool, raw *rawOperation) (Operation, *result.Error) {
 	op := Operation{enabled: enabled}
-	if name == logsOperation {
+	if limits, ok := lineStreamLimits[name]; ok {
 		var err *result.Error
-		if op.maxLines, err = parseMaxLines(name, defaultLogsMaxLines); err != nil {
+		if op.maxLines, err = parseMaxLines(name, limits.maxLines); err != nil {
 			return Operation{}, err
 		}
-		if op.maxSince, err = parseMaxSince(name, defaultLogsMaxSince); err != nil {
+		if op.maxSince, err = parseMaxSince(name, limits.maxSince); err != nil {
 			return Operation{}, err
 		}
 	}
@@ -369,7 +369,7 @@ func buildOperation(name string, enabled bool, raw *rawOperation) (Operation, *r
 // applyLogLimits refuses log limits on an operation that reads no line stream,
 // so a setting placed under the wrong key is corrected rather than ignored.
 func applyLogLimits(op *Operation, name string, raw *rawOperation) *result.Error {
-	if name != logsOperation {
+	if _, ok := lineStreamLimits[name]; !ok {
 		for _, unsupported := range []struct {
 			key string
 			set bool
