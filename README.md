@@ -107,7 +107,9 @@ focal -i ~/.ssh/customer-a.pem -p 2222 -l ec2-user web01 kernel --since 1h
 ## MCP（`focal serve`）
 
 `focal serve` は CLI と同じ operation を、stateless Streamable HTTP（MCP spec `2026-07-28`）の
-MCP tool として公開します。認証機構は持たず、既定で `127.0.0.1` にのみ bind します。
+MCP tool として公開します。**focal 自身はユーザーを認証しません**（誰が呼んでいるかを判定する機構は
+持ちません）。既定で `127.0.0.1` にのみ bind し、それ以外のアドレスへ bind するには
+`--allow-unauthenticated-listen` を明示するか、後述の upstream token を設定する必要があります。
 
 ```sh
 focal serve --listen 127.0.0.1:8080 \
@@ -115,6 +117,22 @@ focal serve --listen 127.0.0.1:8080 \
   --identity default=~/.ssh/id_ed25519 \
   --identity customer-a=~/.ssh/customer-a.pem
 ```
+
+focal と呼び出し元の間の境界を強化する手段が2つあります。どちらも単独で運用でき、併用もできます。
+
+- **Unix domain socket**（`--listen unix:/run/focal/focal.sock`）— 境界をファイルシステムの
+  パーミッションで引きます。socket は `0600` で作成されるため、reachable なのは focal を動かしている
+  ユーザーだけで、別ホストからは原理的に到達できません。**`0600` が防ぐのは別ユーザーからのアクセスだけで、
+  同一ユーザーの別プロセスからの接続は防げません。** UDS 経由の bind では
+  `--allow-unauthenticated-listen` は不要かつ無関係です（ネットワーク到達性の判定そのものを行わないため）。
+- **固定 shared secret**（`--upstream-token`、または `FOCAL_UPSTREAM_TOKEN`）— 境界をリクエストに載る
+  値で引きます。token が設定されているリクエストにのみ `Authorization: Bearer <token>` を要求し、
+  一致しなければ `401`（body は固定文字列、token・設定値・スタック情報は含みません）を返します。token は
+  32 バイト以上の可視 ASCII が必要です。**`--upstream-token` はプロセス一覧から読めるため、
+  `FOCAL_UPSTREAM_TOKEN` を推奨します**（`--upstream-token` を使うと起動時に stderr へその旨の警告が
+  出ます。token 自体は出力されません）。upstream token が設定されている場合、非 loopback bind は
+  `--allow-unauthenticated-listen` なしでも許可されますが、通信は暗号化されないため（token も応答も平文で
+  流れます）、loopback 以外で bind するなら前段に TLS 終端プロキシを置いてください。
 
 - **host は allowlist にしません。** 制限すべきは「どこを見るか」ではなく「そこで何ができるか」であり、
   「突然渡されたサーバーを安全に調査させられる」ことが Focal の価値です。
@@ -148,12 +166,56 @@ Claude Desktop (カスタムコネクタ)
   ↓ HTTPS + OAuth 2.1 (OIDC ブラウザ認証 → Bearer)
 idproxy (EXTERNAL_URL)
   ↓ UPSTREAM_URL (認証済みリクエストのみ)
-focal serve --listen 127.0.0.1:8080
+focal serve
   ↓ SSH
 Target Server
 ```
 
-`docker-compose.yml` の例:
+idproxy と focal の間（`UPSTREAM_URL`）は、既定では平文 HTTP かつ focal 側に認証がないため、
+同一ホスト／同一信頼境界での利用を前提とします。この間を強化する方式を idproxy 側が
+（[youyo/idproxy#33](https://github.com/youyo/idproxy/issues/33) /
+[#34](https://github.com/youyo/idproxy/issues/34)）で対応するまでは、以下の focal 側設定を
+入れても idproxy はまだ利用しません。対応後に有効になります。
+
+**方式A: Unix domain socket（同一ホスト推奨）**
+
+idproxy と focal を同一ホスト・**同一 UID** で動かせるなら、UDS がもっとも狭い境界になります
+（`0600` は別ユーザーからのアクセスを防ぎますが、同一ユーザーの別プロセスからの接続は防げません）。
+UID が揃えられない環境（別ホスト、あるいは compose 側で UID を制御できないコンテナ）では方式Bを
+使ってください。socket のパーミッションはコード側で固定されているため、この構成でも `0600` より
+緩めることはできません。
+
+```yaml
+services:
+  idproxy:
+    image: ghcr.io/youyo/idproxy:latest
+    user: "10001:10001"   # focal コンテナと UID を揃える
+    ports:
+      - "8443:8443"
+    environment:
+      EXTERNAL_URL: https://focal.example.com
+      UPSTREAM_URL: unix:///run/focal/focal.sock   # idproxy #33/#34 対応後に有効
+    volumes:
+      - focal-sock:/run/focal
+    # OIDC プロバイダの設定等は idproxy 側のドキュメントを参照
+
+  focal:
+    image: ghcr.io/youyo/focal:latest
+    user: "10001:10001"   # idproxy コンテナと同一 UID。異なると 0600 socket に idproxy が接続できない
+    command: ["serve", "--listen", "unix:/run/focal/focal.sock", "--identity", "default=/keys/id_ed25519"]
+    volumes:
+      - ~/.ssh:/root/.ssh:ro
+      - ./keys:/keys:ro
+      - focal-sock:/run/focal
+
+volumes:
+  focal-sock:
+```
+
+**方式B: 固定 shared secret（コンテナ跨ぎ・別ホスト）**
+
+UID を揃えられない、あるいは focal と idproxy が別ホストにいる場合は upstream token を使います。
+token はプレースホルダです。実値は `openssl rand -hex 32` 等で生成し、リポジトリにコミットしないでください。
 
 ```yaml
 services:
@@ -164,17 +226,25 @@ services:
     environment:
       EXTERNAL_URL: https://focal.example.com
       UPSTREAM_URL: http://focal:8080
+      UPSTREAM_AUTH_HEADER: "Bearer <FOCAL_UPSTREAM_TOKEN の値>"   # idproxy #33/#34 対応後に有効
     # OIDC プロバイダの設定等は idproxy 側のドキュメントを参照
 
   focal:
     image: ghcr.io/youyo/focal:latest
     command: ["serve", "--listen", "127.0.0.1:8080", "--identity", "default=/keys/id_ed25519"]
+    environment:
+      FOCAL_UPSTREAM_TOKEN: "<32バイト以上の可視ASCII。プレースホルダ。実値は secret 管理に置く>"
     volumes:
       - ~/.ssh:/root/.ssh:ro
       - ./keys:/keys:ro
     # focal はループバックにしか bind しないため、idproxy と同じネットワーク namespace か
-    # 同一 Pod で動かす
+    # 同一 Pod で動かす（別ホストに分ける場合は non-loopback bind が必要になり、token が
+    # あっても通信は平文なので前段に TLS 終端プロキシを置く）
 ```
+
+idproxy 側は focal からの `401` をそのまま呼び出し元へ素通しするのではなく、idproxy 自身の
+認証エラーとして正規化して返すことが期待されます（focal の内部エラー文言をそのまま外部に
+漏らさないため）。
 
 Claude Desktop 側の接続手順の骨子:
 
@@ -183,9 +253,9 @@ Claude Desktop 側の接続手順の骨子:
 3. 以降 Claude Desktop から idproxy 経由で `inspect_*` ツールが呼び出せる。
 
 **`focal serve` は既定で `127.0.0.1` にのみ bind します。** ループバック以外のアドレスへ bind するには
-`--allow-unauthenticated-listen` を明示する必要があり、指定しない限り起動時エラーになります（安全側
-デフォルト）。idproxy を前段に置く構成では `focal serve` はループバックのまま起動し、外部への公開は
-idproxy 側が担います。
+`--allow-unauthenticated-listen` を明示するか upstream token を設定する必要があり、どちらもなければ
+起動時エラーになります（安全側デフォルト）。idproxy を前段に置く構成では `focal serve` はループバックの
+まま（または UDS で）起動し、外部への公開は idproxy 側が担います。
 
 ## セキュリティモデル
 
