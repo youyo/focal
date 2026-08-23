@@ -14,8 +14,14 @@
 // The server is stateless in the sense the 2026-07-28 revision of the MCP
 // specification means: no initialize handshake, no session id, every POST
 // self-contained. That is what lets focal serve sit behind an ordinary
-// authenticating reverse proxy, which is where its authentication lives —
-// focal itself has none, and binds to loopback unless told otherwise.
+// authenticating reverse proxy, which is where authenticating a user lives —
+// focal does none of that, and binds to loopback unless told otherwise.
+//
+// Nothing in this package reads the Authorization header, and nothing should.
+// The handler NewHandler returns answers whatever reaches it; deciding what may
+// reach it belongs to internal/cli, which chooses the address or socket focal
+// listens on and wraps this handler in the shared-secret check
+// `focal serve --upstream-token` asks for.
 package mcp
 
 import (

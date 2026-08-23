@@ -24,17 +24,23 @@ import (
 // This file is `focal serve`: the same operations the command line offers,
 // offered to a coding agent over MCP instead.
 //
-// focal has no authentication of its own and is not going to grow one — that
-// belongs in front of it, in an authenticating reverse proxy that terminates
-// OAuth and forwards only what it has already vouched for. What focal owes in
-// return is a default that cannot be exposed by accident, which is why it
-// binds to loopback and refuses anything else unless the operator says, in as
-// many words, that something else is in front of it.
+// Authenticating a user is not focal's job and is not going to become one —
+// that belongs in front of it, in an authenticating reverse proxy that
+// terminates OAuth and forwards only what it has already vouched for. What
+// focal owes in return is a default that cannot be exposed by accident, which
+// is why it binds to loopback and refuses anything else unless the operator
+// says, in as many words, that something else is in front of it.
 //
-// A Unix domain socket is the same boundary drawn in the filesystem rather
-// than in the network: the socket is created 0600, so what may reach focal is
-// whatever runs as the user focal runs as, and reaching it from another
-// machine is not a thing that can be arranged.
+// What focal does offer is a boundary on the hop between that proxy and
+// itself, in either of two forms. A Unix domain socket draws it in the
+// filesystem rather than in the network: the socket is created 0600, so what
+// may reach focal is whatever runs as the user focal runs as, and reaching it
+// from another machine is not a thing that can be arranged. A shared secret
+// (--upstream-token, see auth.go) draws it in the request instead: focal
+// answers nothing that does not carry the token it was started with. Neither
+// knows who the caller is, both compose with the other, and either is enough
+// to make a non-loopback bind something the operator chose rather than
+// something that happened.
 //
 // Everything below the HTTP surface is internal/cli's, not internal/mcp's:
 // the identity aliases, the connection options, the ssh(1) client. The MCP
@@ -98,6 +104,10 @@ type serveOptions struct {
 	identities           []string
 	user                 string
 	config               string
+	// upstreamToken is --upstream-token as it was given, which is not
+	// necessarily the token in force: see upstreamToken in auth.go, which
+	// falls back to the environment.
+	upstreamToken string
 }
 
 // newServeCommand builds the serve subcommand. Its flags describe where to
@@ -110,13 +120,19 @@ func newServeCommand(a *app) *cobra.Command {
 		Short: "Serve focal's operations to a coding agent over MCP",
 		Long: "focal serve exposes the same read-only inspections the command line\n" +
 			"offers as MCP tools, over stateless HTTP.\n\n" +
-			"focal has no authentication of its own: put an authenticating proxy in\n" +
+			"focal authenticates no user of its own: put an authenticating proxy in\n" +
 			"front of it. It binds to loopback and refuses any other address unless\n" +
-			"--allow-unauthenticated-listen says one is there.\n\n" +
+			"--allow-unauthenticated-listen says one is there, or an upstream token\n" +
+			"is set.\n\n" +
+			"--upstream-token, or " + upstreamTokenEnv + " in preference to it, makes focal\n" +
+			"answer only requests carrying that token as Authorization: Bearer\n" +
+			"<token>. It is the shared secret for the hop from the proxy, not a\n" +
+			"login: it says nothing about who is calling, and it encrypts nothing.\n\n" +
 			"--listen " + exampleUnixListenAddress + " serves on a Unix domain socket\n" +
 			"instead. The socket is created with permission 0600, so only the user\n" +
 			"focal runs as can reach it; nothing off this machine can, and\n" +
-			"--allow-unauthenticated-listen does not apply.",
+			"--allow-unauthenticated-listen does not apply. A token set alongside it\n" +
+			"is still demanded.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -135,6 +151,9 @@ func newServeCommand(a *app) *cobra.Command {
 		"address to listen on, as host:port, or as "+exampleUnixListenAddress+" for a Unix domain socket")
 	flags.BoolVar(&o.allowUnauthenticated, "allow-unauthenticated-listen", false,
 		"permit binding an address other than loopback, where focal is reachable without authentication")
+	flags.StringVar(&o.upstreamToken, "upstream-token", "",
+		"shared secret every request must carry as Authorization: Bearer <token>; "+
+			upstreamTokenEnv+" sets the same thing without putting it in the process list")
 	flags.StringArrayVar(&o.identities, "identity", nil,
 		"register a private key as alias=path, repeatable; a tool call may name only the alias")
 	flags.StringVar(&o.user, "user", "", "default user to log in as, when a tool call and its host name none")
@@ -170,7 +189,7 @@ type serveHandler struct {
 }
 
 // serveHandler loads the configuration, registers the identity aliases and
-// builds the MCP handler over them.
+// builds the MCP handler over them, behind the token check when there is one.
 func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 	cfg, cfgErr := loadConfigFrom(o.config)
 	if cfgErr != nil {
@@ -180,11 +199,28 @@ func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 	if idsErr != nil {
 		return nil, usageError(idsErr.Code, idsErr.Message, idsErr.Field, idsErr.Allowed)
 	}
+	auth, authErr := newUpstreamAuth(upstreamToken(o))
+	if authErr != nil {
+		return nil, usageError(authErr.Code, authErr.Message, authErr.Field, authErr.Allowed)
+	}
 	runner := &serveRunner{cfg: cfg, identities: ids, newExecutor: a.newExecutor}
 	handler := mcp.NewHandler(cfg, runner, mcp.Options{
 		Version:     buildVersion(),
 		DefaultUser: o.user,
 	})
+	if auth != nil {
+		handler = auth.wrap(handler)
+		if o.upstreamToken != "" {
+			// The flag works, and focal takes it, but an argument
+			// is readable by every process on the machine for as
+			// long as focal runs. Saying so once at startup is the
+			// only thing focal can do about that.
+			fmt.Fprintf(a.stderr,
+				"focal serve: warning: --upstream-token puts the shared secret in this machine's\n"+
+					"process list, where any local process can read it. Set %s instead.\n",
+				upstreamTokenEnv)
+		}
+	}
 	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor}, nil
 }
 
@@ -198,25 +234,55 @@ func (a *app) listen(o serveOptions) (net.Listener, *cliError) {
 		return nil, usageError(addrErr.Code, addrErr.Message, addrErr.Field, addrErr.Allowed)
 	}
 	if !loopback {
-		if !o.allowUnauthenticated {
-			return nil, usageError(
-				"unauthenticated_listen_address",
-				fmt.Sprintf("%s is reachable from beyond this machine, and focal has no authentication of its own", o.listen),
-				"--listen",
-				[]string{"a loopback address such as " + defaultListenAddress, "--allow-unauthenticated-listen"},
-			)
+		if err := a.allowBeyondLoopback(o); err != nil {
+			return nil, err
 		}
-		fmt.Fprintf(a.stderr,
-			"focal serve: warning: listening on %s, which is reachable from beyond this machine.\n"+
-				"focal has no authentication of its own; anything that can reach this address can inspect\n"+
-				"every host reachable from it. Put an authenticating proxy in front of focal.\n",
-			o.listen)
 	}
 	ln, err := net.Listen("tcp", o.listen)
 	if err != nil {
 		return nil, rejected(result.ExecutionError("listen_failed", "cannot listen: "+err.Error()))
 	}
 	return ln, nil
+}
+
+// allowBeyondLoopback decides whether focal may bind an address something off
+// this machine can reach, and says what is still true about it if so.
+//
+// There are two ways to have answered for such an address, and they answer
+// different things. A token means focal itself will refuse whatever does not
+// carry it, so the address being reachable is no longer the whole story — but
+// the connection is still plaintext, and a shared secret sent in the clear is
+// a shared secret anyone on the path now has. --allow-unauthenticated-listen
+// means the operator says something in front of focal is doing the refusing,
+// which focal cannot verify and so states as the assumption it is. Neither
+// case is silent, because in neither case is there nothing left to say.
+func (a *app) allowBeyondLoopback(o serveOptions) *cliError {
+	switch {
+	case upstreamToken(o) != "":
+		fmt.Fprintf(a.stderr,
+			"focal serve: warning: listening on %s, which is reachable from beyond this machine.\n"+
+				"The upstream token is demanded of every request, but nothing here is encrypted: the\n"+
+				"token and every answer cross the network in the clear. Terminate TLS in front of focal.\n",
+			o.listen)
+	case o.allowUnauthenticated:
+		fmt.Fprintf(a.stderr,
+			"focal serve: warning: listening on %s, which is reachable from beyond this machine.\n"+
+				"focal has no authentication of its own; anything that can reach this address can inspect\n"+
+				"every host reachable from it. Put an authenticating proxy in front of focal.\n",
+			o.listen)
+	default:
+		return usageError(
+			"unauthenticated_listen_address",
+			fmt.Sprintf("%s is reachable from beyond this machine, and focal has no authentication of its own", o.listen),
+			"--listen",
+			[]string{
+				"a loopback address such as " + defaultListenAddress,
+				"--allow-unauthenticated-listen",
+				"--upstream-token, or " + upstreamTokenEnv,
+			},
+		)
+	}
+	return nil
 }
 
 // listenUnix binds the Unix domain socket at path.
