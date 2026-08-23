@@ -341,6 +341,147 @@ func TestParseLineLimitRejects(t *testing.T) {
 	}
 }
 
+// TestDurationSecondsMatchesUnit fixes the numeric accessor against the unit
+// table: a caller comparing durations must never have to re-parse String().
+func TestDurationSecondsMatchesUnit(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int64
+	}{
+		{"30s", 30},
+		{"15m", 900},
+		{"2h", 7200},
+		{"1d", 86400},
+		{"999999s", 999999},
+		{"43200m", 2592000},
+		{"720h", 2592000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := vo.ParseDuration(tc.input)
+			if err != nil {
+				t.Fatalf("ParseDuration(%q) rejected: %v", tc.input, err)
+			}
+			if got.Seconds() != tc.want {
+				t.Errorf("Seconds() = %d, want %d", got.Seconds(), tc.want)
+			}
+			if got.String() != tc.input {
+				t.Errorf("String() = %q, want %q", got.String(), tc.input)
+			}
+		})
+	}
+}
+
+// TestDurationRangeBoundaries pins both ends of the accepted range and the
+// values just outside it, so widening the range cannot pass unnoticed.
+func TestDurationRangeBoundaries(t *testing.T) {
+	accepted := []struct {
+		input string
+		want  int64
+	}{
+		{"1s", 1},
+		{"30d", 2592000},
+	}
+	for _, tc := range accepted {
+		t.Run("accept/"+tc.input, func(t *testing.T) {
+			got, err := vo.ParseDuration(tc.input)
+			if err != nil {
+				t.Fatalf("ParseDuration(%q) rejected: %v", tc.input, err)
+			}
+			if got.Seconds() != tc.want {
+				t.Errorf("Seconds() = %d, want %d", got.Seconds(), tc.want)
+			}
+		})
+	}
+	for _, in := range []string{"0s", "31d"} {
+		t.Run("reject/"+in, func(t *testing.T) {
+			got, err := vo.ParseDuration(in)
+			if err == nil {
+				t.Fatalf("ParseDuration(%q) accepted (value %q), want rejected", in, got.String())
+			}
+			assertValidationError(t, err)
+			if got.Seconds() != 0 {
+				t.Errorf("rejected input produced Seconds() = %d, want 0", got.Seconds())
+			}
+		})
+	}
+}
+
+// TestLineLimitIntMatchesInput is the LineLimit counterpart: the integer comes
+// from the accepted token, not from re-parsing String().
+func TestLineLimitIntMatchesInput(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
+		{"10", 10},
+		{"500", 500},
+		{"99999", 99999},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := vo.ParseLineLimit(tc.input)
+			if err != nil {
+				t.Fatalf("ParseLineLimit(%q) rejected: %v", tc.input, err)
+			}
+			if got.Int() != tc.want {
+				t.Errorf("Int() = %d, want %d", got.Int(), tc.want)
+			}
+			if got.String() != tc.input {
+				t.Errorf("String() = %q, want %q", got.String(), tc.input)
+			}
+		})
+	}
+}
+
+func TestLineLimitRangeBoundaries(t *testing.T) {
+	accepted := []struct {
+		input string
+		want  int
+	}{
+		{"1", 1},
+		{"100000", 100000},
+	}
+	for _, tc := range accepted {
+		t.Run("accept/"+tc.input, func(t *testing.T) {
+			got, err := vo.ParseLineLimit(tc.input)
+			if err != nil {
+				t.Fatalf("ParseLineLimit(%q) rejected: %v", tc.input, err)
+			}
+			if got.Int() != tc.want {
+				t.Errorf("Int() = %d, want %d", got.Int(), tc.want)
+			}
+		})
+	}
+	for _, in := range []string{"0", "100001"} {
+		t.Run("reject/"+in, func(t *testing.T) {
+			got, err := vo.ParseLineLimit(in)
+			if err == nil {
+				t.Fatalf("ParseLineLimit(%q) accepted (value %q), want rejected", in, got.String())
+			}
+			assertValidationError(t, err)
+			if got.Int() != 0 {
+				t.Errorf("rejected input produced Int() = %d, want 0", got.Int())
+			}
+		})
+	}
+}
+
+// TestZeroValueAccessorsAreZero pins the zero value at the bottom of every
+// numeric comparison: a value that never went through Parse must not be able
+// to win a "which cap is larger" test by carrying an unset magnitude.
+func TestZeroValueAccessorsAreZero(t *testing.T) {
+	var (
+		dur   vo.Duration
+		lines vo.LineLimit
+	)
+	if dur.Seconds() != 0 {
+		t.Errorf("zero Duration.Seconds() = %d, want 0", dur.Seconds())
+	}
+	if lines.Int() != 0 {
+		t.Errorf("zero LineLimit.Int() = %d, want 0", lines.Int())
+	}
+}
+
 func TestParsePIDAccepts(t *testing.T) {
 	for _, in := range []string{"1", "2", "12345", "4194303", "4194304"} {
 		t.Run(in, func(t *testing.T) {

@@ -10,11 +10,18 @@ import (
 // journalctl --since accepts. Its zero value is not a usable duration and
 // renders as the empty string.
 type Duration struct {
-	s string
+	s    string
+	secs int64
 }
 
 // String returns the duration exactly as it was accepted.
 func (d Duration) String() string { return d.s }
+
+// Seconds returns the span in seconds, as ParseDuration computed it from the
+// magnitude and the unit. Callers comparing a duration against a ceiling read
+// it here instead of re-parsing String(): the zero value reports 0, so a value
+// that never went through ParseDuration cannot exceed any ceiling.
+func (d Duration) Seconds() int64 { return d.secs }
 
 const (
 	maxDurationLen    = 8
@@ -71,8 +78,9 @@ func ParseDuration(v string) (Duration, *result.Error) {
 	if err != nil {
 		return Duration{}, durationSpec.reject("must be digits followed by exactly one unit")
 	}
-	if secs := n * unit; secs < minDurationSecs || secs > maxDurationSecs {
+	secs := n * unit
+	if secs < minDurationSecs || secs > maxDurationSecs {
 		return Duration{}, durationSpec.reject("must be between 1s and 30d")
 	}
-	return Duration{s: v}, nil
+	return Duration{s: v, secs: secs}, nil
 }
