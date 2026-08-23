@@ -6,6 +6,7 @@ package policy_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/youyo/focal/internal/policy"
@@ -16,9 +17,14 @@ import (
 // declare. It is duplicated here on purpose: the table is the production
 // declaration and this slice is the test's independent expectation of it.
 var allOperations = []string{
-	"system", "cpu", "memory", "storage",
-	"network", "processes", "service", "logs", "kernel",
+	"system", "cpu", "memory", "storage", "network",
+	"processes", "service", "logs", "kernel", "inspect",
 }
+
+// journalOperations are the operations that read the system journal. They are
+// the only ones whose capability offers a mode other than never, so listing
+// them separately keeps "who may escalate" one visible fact in the test.
+var journalOperations = []string{"logs", "kernel"}
 
 func TestSudoModeZeroValueIsNever(t *testing.T) {
 	var m policy.SudoMode
@@ -99,21 +105,52 @@ func TestResolveAllowsNeverForEveryOperation(t *testing.T) {
 	}
 }
 
-func TestResolveAllowsAutoForLogsOnly(t *testing.T) {
-	p, err := policy.Resolve("logs", policy.SudoAuto)
-	if err != nil {
-		t.Fatalf("Resolve(\"logs\", auto) returned error %v, want success", err)
-	}
-	if p.Operation() != "logs" || p.Sudo() != policy.SudoAuto {
-		t.Fatalf("Resolve(\"logs\", auto) = {%q, %v}, want {\"logs\", auto}", p.Operation(), p.Sudo())
+// TestResolveAllowsAutoForJournalOperationsOnly pins the widest privilege any
+// operation may be configured with: journalctl-backed reads may escalate on
+// denial, and nothing else may escalate at all.
+func TestResolveAllowsAutoForJournalOperationsOnly(t *testing.T) {
+	for _, name := range journalOperations {
+		p, err := policy.Resolve(name, policy.SudoAuto)
+		if err != nil {
+			t.Errorf("Resolve(%q, auto) returned error %v, want success", name, err)
+			continue
+		}
+		if p.Operation() != name || p.Sudo() != policy.SudoAuto {
+			t.Errorf("Resolve(%q, auto) = {%q, %v}, want {%q, auto}", name, p.Operation(), p.Sudo(), name)
+		}
 	}
 
 	for _, name := range allOperations {
-		if name == "logs" {
+		if slices.Contains(journalOperations, name) {
 			continue
 		}
 		if _, err := policy.Resolve(name, policy.SudoAuto); err == nil {
 			t.Errorf("Resolve(%q, auto) succeeded, want capability violation", name)
+		}
+	}
+}
+
+// TestResolveRejectsAlwaysForEveryOperation is issue #11's startup rule at the
+// point it is decided: no operation Focal declares may be configured to run
+// every command as root, so `sudo: always` is a startup error for all ten.
+func TestResolveRejectsAlwaysForEveryOperation(t *testing.T) {
+	for _, name := range allOperations {
+		p, err := policy.Resolve(name, policy.SudoAlways)
+		if err == nil {
+			t.Errorf("Resolve(%q, always) succeeded, want capability violation", name)
+			continue
+		}
+		if err.Kind != result.KindPolicy || err.Code != "sudo_not_allowed" {
+			t.Errorf("Resolve(%q, always) error = %s/%s, want policy/sudo_not_allowed", name, err.Kind, err.Code)
+		}
+		if err.Field != "operations."+name+".sudo" {
+			t.Errorf("Resolve(%q, always) Field = %q, want operations.%s.sudo", name, err.Field, name)
+		}
+		if !slices.Contains(err.Allowed, "never") {
+			t.Errorf("Resolve(%q, always) Allowed = %v, want it to name never", name, err.Allowed)
+		}
+		if p != (policy.Policy{}) {
+			t.Errorf("Resolve(%q, always) returned non-zero Policy %+v on error", name, p)
 		}
 	}
 }

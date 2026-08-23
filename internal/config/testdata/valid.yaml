@@ -15,4 +15,8 @@ operations:
     max_since: 12h
   kernel:
     enabled: true
-    sudo: never
+    sudo: auto
+    max_lines: 300
+    max_since: 6h
+  inspect:
+    enabled: false
