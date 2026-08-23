@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -236,6 +238,157 @@ func callTool(t *testing.T, url, tool string, args map[string]any) (content stri
 		t.Fatalf("tools/call %s: no content", tool)
 	}
 	return out.Result.Content[0].Text, out.Result.IsError
+}
+
+// TestServeHasConfigFlag pins the wiring itself: serve must define its own
+// --config flag rather than leaving it an unknown flag inherited from root.
+func TestServeHasConfigFlag(t *testing.T) {
+	cmd := newServeCommand(newServeApp(t).app)
+	if cmd.Flags().Lookup("config") == nil {
+		t.Fatal("serve has no --config flag")
+	}
+}
+
+// TestServeConfigFlagReadsTheNamedFileInsteadOfTheDefaultLocation proves
+// `focal serve --config` is not just accepted but actually consulted: the
+// default XDG location leaves kernel disabled (so inspect_kernel is absent
+// from tools/list), while the file --config names enables it.
+func TestServeConfigFlagReadsTheNamedFileInsteadOfTheDefaultLocation(t *testing.T) {
+	withConfig(t, "") // default location: kernel stays disabled
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "other.yaml")
+	if err := os.WriteFile(path, []byte("operations:\n  kernel:\n    enabled: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	s := newServeApp(t)
+	url := serveHost(t, s, serveOptions{listen: "127.0.0.1:0", config: path})
+
+	if !listedToolsContain(t, url, "inspect_kernel") {
+		t.Fatal("--config named a file enabling kernel, but inspect_kernel is not offered")
+	}
+}
+
+// TestServeConfigFlagDefaultsToTheStandardLocation pins the converse of the
+// above: with no --config, serve reads focal's default XDG location, so an
+// operation that location leaves disabled is not offered.
+func TestServeConfigFlagDefaultsToTheStandardLocation(t *testing.T) {
+	withConfig(t, "")
+
+	s := newServeApp(t)
+	url := serveHost(t, s, serveOptions{listen: "127.0.0.1:0"})
+
+	if listedToolsContain(t, url, "inspect_kernel") {
+		t.Fatal("kernel is disabled by default, but inspect_kernel is offered")
+	}
+}
+
+// TestServeConfigFlagRejectsAnUnreadablePath and
+// TestServeConfigFlagRejectsInvalidYAML pin that a bad --config path or a
+// malformed file leaves through the same structured errors config.Load
+// already produces for the default location.
+func TestServeConfigFlagRejectsAnUnreadablePath(t *testing.T) {
+	withConfig(t, "")
+	s := newServeApp(t)
+
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: t.TempDir()})
+	if err == nil {
+		t.Fatal("an unreadable --config path was accepted")
+	}
+	if err.err.Code != "unreadable_config" {
+		t.Errorf("code = %q, want %q", err.err.Code, "unreadable_config")
+	}
+}
+
+func TestServeConfigFlagRejectsInvalidYAML(t *testing.T) {
+	withConfig(t, "")
+	s := newServeApp(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("operations:\n  kernel: [not-a-map]\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path})
+	if err == nil {
+		t.Fatal("an invalid --config file was accepted")
+	}
+	if err.err.Code != "invalid_yaml" {
+		t.Errorf("code = %q, want %q", err.err.Code, "invalid_yaml")
+	}
+}
+
+// listedToolsContain posts one tools/list request and reports whether name
+// is among the tools offered.
+func listedToolsContain(t *testing.T, url, name string) bool {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+		"params": map[string]any{
+			"_meta": map[string]any{
+				"io.modelcontextprotocol/protocolVersion":    "2026-07-28",
+				"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "focal-test", "version": "0"},
+				"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	req.Header.Set("Mcp-Method", "tools/list")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var payload []byte
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			payload = []byte(data)
+			break
+		}
+		if strings.HasPrefix(scanner.Text(), "{") {
+			payload = scanner.Bytes()
+			break
+		}
+	}
+	if len(payload) == 0 {
+		t.Fatalf("no JSON-RPC message in the response (status %d)", resp.StatusCode)
+	}
+	var out struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &out); err != nil {
+		t.Fatalf("decode %q: %v", payload, err)
+	}
+	if out.Error != nil {
+		t.Fatalf("tools/list: JSON-RPC error %s", out.Error)
+	}
+	for _, tool := range out.Result.Tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServeRunsTheOperationOverSSH(t *testing.T) {

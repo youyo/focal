@@ -2,3 +2,4 @@
 /dist/
 *.test
 share.html
+.voyager/

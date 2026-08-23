@@ -153,12 +153,20 @@ func (a *app) newRootCommand(g *globals) *cobra.Command {
 }
 
 // loadConfig reads focal's configuration from --config when the caller named
-// one, or from the default XDG location otherwise. Every other check —
-// existence, size, permissions, YAML well-formedness, capability resolution —
-// is identical either way; only where the file is looked up changes.
+// one, or from the default XDG location otherwise.
 func loadConfig(g *globals) (config.Config, *result.Error) {
-	if g.config != "" {
-		return config.LoadFrom(g.config)
+	return loadConfigFrom(g.config)
+}
+
+// loadConfigFrom reads focal's configuration from path, or the default XDG
+// location when path is empty. Every other check — existence, size,
+// permissions, YAML well-formedness, capability resolution — is identical
+// either way; only where the file is looked up changes. Both the root
+// command's --config and `focal serve`'s own --config go through this, so a
+// bad path or a malformed file is rejected the same way from either.
+func loadConfigFrom(path string) (config.Config, *result.Error) {
+	if path != "" {
+		return config.LoadFrom(path)
 	}
 	return config.Load()
 }
