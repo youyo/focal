@@ -32,6 +32,13 @@ type Call struct {
 	SudoPrefixed bool
 }
 
+// Response is one answer for RespondSeq: the Output and error one Execute
+// call should return.
+type Response struct {
+	Output ssh.Output
+	Err    error
+}
+
 // Recorder is an ssh.Executor that runs nothing. Its zero value is usable and
 // returns an empty Output with a nil error; Respond changes that.
 type Recorder struct {
@@ -39,15 +46,33 @@ type Recorder struct {
 	calls  []Call
 	output ssh.Output
 	err    error
+	seq    []Response
+	seqIdx int
 }
 
 var _ ssh.Executor = (*Recorder)(nil)
 
-// Respond sets what every subsequent Execute returns.
+// Respond sets what every subsequent Execute returns. It replaces whatever a
+// prior call to RespondSeq programmed.
 func (r *Recorder) Respond(output ssh.Output, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.output, r.err = output, err
+	r.seq, r.seqIdx = nil, 0
+}
+
+// RespondSeq programs a sequence of answers, one per call, in order — for an
+// operation such as system or inspect whose Execute makes several calls and
+// needs each to see a different Command's output. It replaces whatever a
+// prior call to Respond or RespondSeq programmed. Once every response in the
+// sequence has been consumed, further calls keep returning the last one, so a
+// test that under-counts its own calls fails on an assertion rather than a
+// panic.
+func (r *Recorder) RespondSeq(responses ...Response) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seq = slices.Clone(responses)
+	r.seqIdx = 0
 }
 
 // Execute records the call and returns the programmed response. The context is
@@ -57,6 +82,13 @@ func (r *Recorder) Execute(_ context.Context, target vo.Target, cmd ssh.Command)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, Call{Target: target, Command: cmd, SudoPrefixed: ssh.PrefixesSudo(cmd)})
+
+	if len(r.seq) > 0 {
+		idx := min(r.seqIdx, len(r.seq)-1)
+		r.seqIdx++
+		resp := r.seq[idx]
+		return resp.Output, resp.Err
+	}
 	return r.output, r.err
 }
 

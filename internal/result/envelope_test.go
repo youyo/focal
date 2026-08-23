@@ -60,7 +60,7 @@ func TestEnvelopeEncodeOmitsEmptyOptionalFields(t *testing.T) {
 		t.Fatalf("unmarshal: %v", jsonErr)
 	}
 
-	for _, key := range []string{"truncated", "stdout", "stderr", "data", "error"} {
+	for _, key := range []string{"truncated", "stdout", "stderr", "data", "error", "parts"} {
 		if _, ok := decoded[key]; ok {
 			t.Fatalf("%s must be omitted when empty, got %s", key, got)
 		}
@@ -185,6 +185,143 @@ func TestEnvelopeTruncatedSetsFlagAndExitCode(t *testing.T) {
 				t.Fatalf("exit_code = %d, want %d", decoded.ExitCode, tc.wantExitCode)
 			}
 		})
+	}
+}
+
+// TestEnvelopeEncodeMatchesGoldenWithNoParts pins the non-breaking claim
+// directly: an Envelope built the same way M2's did — Parts left at its zero
+// value — still encodes to the exact bytes the golden file recorded before
+// Parts existed. TestEnvelopeEncodeMatchesGolden already exercises this
+// implicitly; this test names the guarantee so a future change to Parts'
+// omitempty behavior fails loudly here.
+func TestEnvelopeEncodeMatchesGoldenWithNoParts(t *testing.T) {
+	env := result.Envelope{
+		Operation:  "service",
+		Host:       "user@host.example",
+		Status:     result.StatusOK,
+		ExitCode:   0,
+		DurationMs: 42,
+		Stdout:     "ActiveState=active\n",
+		Data:       map[string]string{"ActiveState": "active"},
+	}
+	got, err := env.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want, readErr := os.ReadFile(filepath.Join("testdata", "envelope_golden.json"))
+	if readErr != nil {
+		t.Fatalf("read golden: %v", readErr)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("Encode mismatch:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+// TestEnvelopePartsRoundTripsAndNests fixes the Part shape: the fields Encode
+// must carry, and that a Part can itself hold Parts for inspect's nesting.
+func TestEnvelopePartsRoundTripsAndNests(t *testing.T) {
+	env := result.Envelope{
+		Operation:  "inspect",
+		Host:       "host",
+		Status:     result.StatusFailed,
+		ExitCode:   1,
+		DurationMs: 30,
+		Parts: []result.Part{
+			{
+				Name:       "system",
+				Status:     result.StatusOK,
+				ExitCode:   0,
+				DurationMs: 10,
+				Stdout:     "Linux host 6.1.0",
+				Parts: []result.Part{
+					{Name: "uname", Status: result.StatusOK, DurationMs: 10, Stdout: "Linux host 6.1.0"},
+				},
+			},
+			{
+				Name:       "processes",
+				Status:     result.StatusFailed,
+				ExitCode:   1,
+				DurationMs: 20,
+				Stderr:     "permission denied",
+				Error:      result.ExecutionError("ssh_failed", "ssh: permission denied"),
+			},
+		},
+	}
+
+	got, err := env.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	var decoded struct {
+		Parts []struct {
+			Name  string `json:"name"`
+			Parts []struct {
+				Name string `json:"name"`
+			} `json:"parts,omitempty"`
+			Error *result.Error `json:"error,omitempty"`
+		} `json:"parts"`
+	}
+	if jsonErr := json.Unmarshal(got, &decoded); jsonErr != nil {
+		t.Fatalf("unmarshal: %v", jsonErr)
+	}
+	if len(decoded.Parts) != 2 {
+		t.Fatalf("got %d parts, want 2", len(decoded.Parts))
+	}
+	if decoded.Parts[0].Name != "system" {
+		t.Fatalf("parts[0].name = %q, want system", decoded.Parts[0].Name)
+	}
+	if len(decoded.Parts[0].Parts) != 1 || decoded.Parts[0].Parts[0].Name != "uname" {
+		t.Fatalf("parts[0].parts = %+v, want one nested part named uname", decoded.Parts[0].Parts)
+	}
+	if decoded.Parts[1].Error == nil || decoded.Parts[1].Error.Code != "ssh_failed" {
+		t.Fatalf("parts[1].error = %+v, want ssh_failed", decoded.Parts[1].Error)
+	}
+}
+
+// TestEnvelopeEncodeIndentMatchesEncodeContent pins EncodeIndent to the same
+// data and escaping behavior as Encode — only the whitespace differs.
+func TestEnvelopeEncodeIndentMatchesEncodeContent(t *testing.T) {
+	env := result.Envelope{
+		Operation:  "logs",
+		Host:       "host",
+		Status:     result.StatusOK,
+		ExitCode:   0,
+		DurationMs: 5,
+		Stdout:     "<tag> a & b",
+		Parts:      []result.Part{{Name: "logs", Status: result.StatusOK, DurationMs: 5}},
+	}
+
+	compact, err := env.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	indented, err := env.EncodeIndent()
+	if err != nil {
+		t.Fatalf("EncodeIndent: %v", err)
+	}
+
+	if string(indented) == string(compact) {
+		t.Fatal("EncodeIndent produced the same bytes as Encode, want indentation")
+	}
+	if !strings.Contains(string(indented), "\n  \"operation\"") {
+		t.Fatalf("EncodeIndent did not use a two-space indent: %s", indented)
+	}
+	for _, r := range []string{"<", ">", "&"} {
+		if !strings.Contains(string(indented), r) {
+			t.Fatalf("EncodeIndent escaped %q, want raw character preserved", r)
+		}
+	}
+
+	var compactDecoded, indentedDecoded result.Envelope
+	if jsonErr := json.Unmarshal(compact, &compactDecoded); jsonErr != nil {
+		t.Fatalf("unmarshal compact: %v", jsonErr)
+	}
+	if jsonErr := json.Unmarshal(indented, &indentedDecoded); jsonErr != nil {
+		t.Fatalf("unmarshal indented: %v", jsonErr)
+	}
+	if compactDecoded.Stdout != indentedDecoded.Stdout || len(compactDecoded.Parts) != len(indentedDecoded.Parts) {
+		t.Fatalf("EncodeIndent decoded to different content: %+v vs %+v", compactDecoded, indentedDecoded)
 	}
 }
 

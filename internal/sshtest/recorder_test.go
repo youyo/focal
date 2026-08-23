@@ -103,6 +103,80 @@ func TestRecorderCallsAreACopy(t *testing.T) {
 	}
 }
 
+// TestRecorderRespondSeqAnswersEachCallInOrder is the API a multi-call
+// operation (system, inspect) needs from the mock: successive Execute calls
+// see successive programmed responses, not the same one repeated.
+func TestRecorderRespondSeqAnswersEachCallInOrder(t *testing.T) {
+	first := ssh.Output{Stdout: "first", ExitCode: 0}
+	second := ssh.Output{Stdout: "second", ExitCode: 0}
+	thirdErr := result.ExecutionError("ssh_failed", "third failed")
+
+	var rec sshtest.Recorder
+	rec.RespondSeq(
+		sshtest.Response{Output: first},
+		sshtest.Response{Output: second},
+		sshtest.Response{Err: thirdErr},
+	)
+
+	target := mustTarget(t, "example.com")
+	cmd := mustUptime(t, policy.Policy{})
+
+	got1, err1 := rec.Execute(t.Context(), target, cmd)
+	if err1 != nil || got1 != first {
+		t.Fatalf("call 1 = %+v, %v, want %+v, nil", got1, err1, first)
+	}
+	got2, err2 := rec.Execute(t.Context(), target, cmd)
+	if err2 != nil || got2 != second {
+		t.Fatalf("call 2 = %+v, %v, want %+v, nil", got2, err2, second)
+	}
+	got3, err3 := rec.Execute(t.Context(), target, cmd)
+	var e3 *result.Error
+	if !errors.As(err3, &e3) || e3.Code != "ssh_failed" {
+		t.Fatalf("call 3 error = %v, want ssh_failed", err3)
+	}
+	if got3.Stdout != "" {
+		t.Fatalf("call 3 output = %+v, want zero Output alongside the error", got3)
+	}
+
+	if len(rec.Calls()) != 3 {
+		t.Fatalf("recorded %d calls, want 3", len(rec.Calls()))
+	}
+}
+
+// TestRecorderRespondSeqRepeatsLastResponseOnceExhausted keeps a test that
+// calls Execute more times than it programmed from panicking or wrapping
+// around to the first response.
+func TestRecorderRespondSeqRepeatsLastResponseOnceExhausted(t *testing.T) {
+	last := ssh.Output{Stdout: "last", ExitCode: 0}
+
+	var rec sshtest.Recorder
+	rec.RespondSeq(sshtest.Response{Output: last})
+
+	target := mustTarget(t, "example.com")
+	cmd := mustUptime(t, policy.Policy{})
+
+	for i := 0; i < 3; i++ {
+		got, err := rec.Execute(t.Context(), target, cmd)
+		if err != nil || got != last {
+			t.Fatalf("call %d = %+v, %v, want %+v, nil", i, got, err, last)
+		}
+	}
+}
+
+// TestRecorderRespondReplacesRespondSeq documents that the two programming
+// APIs are not additive: the most recent call wins, so a test cannot leave a
+// RespondSeq behind and have a later Respond silently ignored.
+func TestRecorderRespondReplacesRespondSeq(t *testing.T) {
+	var rec sshtest.Recorder
+	rec.RespondSeq(sshtest.Response{Output: ssh.Output{Stdout: "seq"}})
+	rec.Respond(ssh.Output{Stdout: "single"}, nil)
+
+	got, err := rec.Execute(t.Context(), mustTarget(t, "example.com"), mustUptime(t, policy.Policy{}))
+	if err != nil || got.Stdout != "single" {
+		t.Fatalf("Execute = %+v, %v, want Stdout=single, nil", got, err)
+	}
+}
+
 func mustTarget(t *testing.T, s string) vo.Target {
 	t.Helper()
 	target, err := vo.ParseTarget(s)
