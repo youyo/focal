@@ -37,3 +37,73 @@ ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service
 
 # sudo prefix with command arguments
 ssh -n -T -o BatchMode=yes -i /home/focal/.ssh/id_ed25519 -p 2222 -- ops@example.com sudo -n systemctl show nginx.service
+
+# Below: one block per exported factory, built against example.com with no
+# options and no sudo, so that the part that differs between them is the remote
+# command itself. Together they are the complete set of programs Focal can ask
+# a host to run; a factory added without a block here fails the count check in
+# TestBuildArgvMatchesGolden.
+#
+# The caller-supplied tokens in these lines are nginx.service (a
+# vo.ServiceName), 30m and 1h (a vo.Duration) and 200 (a vo.LineLimit).
+# Everything else is a string literal in commands.go.
+
+# UptimeCommand
+ssh -n -T -o BatchMode=yes -- example.com uptime
+
+# UnameCommand
+ssh -n -T -o BatchMode=yes -- example.com uname -a
+
+# HostnameCommand
+ssh -n -T -o BatchMode=yes -- example.com hostname
+
+# DateCommand
+ssh -n -T -o BatchMode=yes -- example.com date --iso-8601=seconds
+
+# OSReleaseCommand
+ssh -n -T -o BatchMode=yes -- example.com cat /etc/os-release
+
+# LSCPUCommand
+ssh -n -T -o BatchMode=yes -- example.com lscpu
+
+# LoadAvgCommand
+ssh -n -T -o BatchMode=yes -- example.com cat /proc/loadavg
+
+# FreeCommand
+ssh -n -T -o BatchMode=yes -- example.com free -b
+
+# MemInfoCommand
+ssh -n -T -o BatchMode=yes -- example.com cat /proc/meminfo
+
+# DFCommand
+ssh -n -T -o BatchMode=yes -- example.com df -PT
+
+# LSBLKCommand
+ssh -n -T -o BatchMode=yes -- example.com lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS
+
+# FindMntCommand
+ssh -n -T -o BatchMode=yes -- example.com findmnt
+
+# IPAddrCommand
+ssh -n -T -o BatchMode=yes -- example.com ip -details addr show
+
+# IPRouteCommand
+ssh -n -T -o BatchMode=yes -- example.com ip route show
+
+# SocketStatsCommand
+ssh -n -T -o BatchMode=yes -- example.com ss -lntup
+
+# ResolvConfCommand
+ssh -n -T -o BatchMode=yes -- example.com cat /etc/resolv.conf
+
+# ProcessListCommand
+ssh -n -T -o BatchMode=yes -- example.com ps -eo pid,ppid,user,state,%cpu,%mem,etime,comm,args
+
+# ServiceStatusCommand
+ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result
+
+# LogsCommand
+ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --no-pager --output=short-iso
+
+# KernelLogsCommand
+ssh -n -T -o BatchMode=yes -- example.com journalctl -k --since=-1h -n 200 --no-pager --output=short-iso

@@ -24,28 +24,32 @@ func TestNewCommandAccepts(t *testing.T) {
 	tests := []struct {
 		name    string
 		program string
-		args    []string
+		args    []argToken
+		want    []string
 	}{
-		{"program only", "uptime", nil},
-		{"hyphenated program", "lsb-release", nil},
-		{"digit in program", "ss2", nil},
-		{"typical arguments", "systemctl", []string{"status", "nginx.service"}},
-		{"absolute path argument", "cat", []string{"/proc/meminfo"}},
-		{"every allowed character", "df", []string{"aZ0_@+=:,./-"}},
-		{"argument at the size ceiling", "cat", []string{strings.Repeat("a", 512)}},
-		{"program at the size ceiling", strings.Repeat("a", 512), nil},
+		{"program only", "uptime", nil, nil},
+		{"hyphenated program", "lsb-release", nil, nil},
+		{"digit in program", "ss2", nil, nil},
+		{"typical arguments", "systemctl", []argToken{lit("show"), val("nginx.service")}, []string{"show", "nginx.service"}},
+		{"absolute path argument", "cat", []argToken{lit("/proc/meminfo")}, []string{"/proc/meminfo"}},
+		{"every allowed character", "df", []argToken{val("aZ0_@+=:,./-")}, []string{"aZ0_@+=:,./-"}},
+		{"option literal", "uname", []argToken{lit("-a")}, []string{"-a"}},
+		{"literal carrying a percent sign", "ps", []argToken{lit("-eo"), lit("%cpu,%mem")}, []string{"-eo", "%cpu,%mem"}},
+		{"prefixed value", "journalctl", []argToken{prefixed("--since=-", "30m")}, []string{"--since=-30m"}},
+		{"argument at the size ceiling", "cat", []argToken{val(strings.Repeat("a", 512))}, []string{strings.Repeat("a", 512)}},
+		{"program at the size ceiling", strings.Repeat("a", 512), nil, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, err := newCommand(policy.Policy{}, tc.program, tc.args...)
 			if err != nil {
-				t.Fatalf("newCommand(%q, %q) = %v, want no error", tc.program, tc.args, err)
+				t.Fatalf("newCommand(%q, %v) = %v, want no error", tc.program, tc.args, err)
 			}
 			if cmd.Program() != tc.program {
 				t.Errorf("Program() = %q, want %q", cmd.Program(), tc.program)
 			}
-			if !slices.Equal(cmd.Args(), tc.args) {
-				t.Errorf("Args() = %q, want %q", cmd.Args(), tc.args)
+			if !slices.Equal(cmd.Args(), tc.want) {
+				t.Errorf("Args() = %q, want %q", cmd.Args(), tc.want)
 			}
 			if cmd.IsZero() {
 				t.Error("IsZero() = true for a constructed command")
@@ -54,6 +58,9 @@ func TestNewCommandAccepts(t *testing.T) {
 	}
 }
 
+// TestNewCommandRejectsUnsafeArguments is the reject list for val(): every
+// value a caller can put into an argv goes through it, and nothing on this list
+// may survive the trip.
 func TestNewCommandRejectsUnsafeArguments(t *testing.T) {
 	tests := []struct {
 		name string
@@ -82,11 +89,71 @@ func TestNewCommandRejectsUnsafeArguments(t *testing.T) {
 		{"leading hyphen flag", "--since"},
 		{"leading hyphen option", "-oProxyCommand=evil"},
 		{"non-ascii", "café"},
+		{"percent expansion is a literal-only character", "%cpu"},
 		{"over the size ceiling", strings.Repeat("a", 513)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := newCommand(policy.Policy{}, "cat", tc.arg)
+			cmd, err := newCommand(policy.Policy{}, "cat", val(tc.arg))
+			assertRejected(t, cmd, err, "args")
+		})
+
+		// The same value is refused when it arrives behind a prefix: the
+		// literal is what makes the token an option, so a prefix must not
+		// double as permission to relax what follows it.
+		t.Run(tc.name+" behind a prefix", func(t *testing.T) {
+			cmd, err := newCommand(policy.Policy{}, "journalctl", prefixed("--since=-", tc.arg))
+			assertRejected(t, cmd, err, "args")
+		})
+	}
+}
+
+// TestPrefixedTokenIsBoundedAsAWhole covers the seam between the two halves of
+// a prefixed token: each half can be under the ceiling while their
+// concatenation is over it.
+func TestPrefixedTokenIsBoundedAsAWhole(t *testing.T) {
+	cmd, err := newCommand(policy.Policy{}, "journalctl", prefixed("--since=-", strings.Repeat("a", 512)))
+	assertRejected(t, cmd, err, "args")
+}
+
+// TestLiteralTokensMayLookLikeOptions states the asymmetry the token type
+// exists for. "-a" is a legitimate token when Focal wrote it and an injected
+// option when a caller supplied it, and only the constructor tells the two
+// apart.
+func TestLiteralTokensMayLookLikeOptions(t *testing.T) {
+	cmd, err := newCommand(policy.Policy{}, "uname", lit("-a"))
+	if err != nil {
+		t.Fatalf("newCommand with a literal option: %v", err)
+	}
+	if got := cmd.Args(); !slices.Equal(got, []string{"-a"}) {
+		t.Errorf("Args() = %q, want %q", got, []string{"-a"})
+	}
+	rejected, err := newCommand(policy.Policy{}, "uname", val("-a"))
+	assertRejected(t, rejected, err, "args")
+}
+
+// TestLiteralTokensAreStillValidated keeps lit() from becoming an escape
+// hatch. It is trusted about leading hyphens only; a shell metacharacter is
+// refused wherever it came from.
+func TestLiteralTokensAreStillValidated(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    string
+	}{
+		{"empty", ""},
+		{"space", "-u nginx"},
+		{"semicolon", "-u;id"},
+		{"dollar", "$(id)"},
+		{"backtick", "`id`"},
+		{"newline", "-u\nid"},
+		{"nul", "-u\x00"},
+		{"pipe", "-u|cat"},
+		{"redirect", "-u>out"},
+		{"quote", "-u'x'"},
+		{"over the size ceiling", strings.Repeat("-", 513)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := newCommand(policy.Policy{}, "journalctl", lit(tc.s))
 			assertRejected(t, cmd, err, "args")
 		})
 	}
@@ -141,16 +208,16 @@ func assertRejected(t *testing.T, cmd Command, err *result.Error, field string) 
 }
 
 func TestCommandArgsAreCopiedInAndOut(t *testing.T) {
-	args := []string{"status", "nginx.service"}
+	args := []argToken{lit("show"), val("nginx.service")}
 	cmd, err := newCommand(policy.Policy{}, "systemctl", args...)
 	if err != nil {
 		t.Fatalf("newCommand: %v", err)
 	}
-	args[0] = "stop"
+	args[0] = lit("stop")
 	got := cmd.Args()
 	got[1] = "sshd.service"
 
-	if want := []string{"status", "nginx.service"}; !slices.Equal(cmd.Args(), want) {
+	if want := []string{"show", "nginx.service"}; !slices.Equal(cmd.Args(), want) {
 		t.Errorf("Args() = %q after the caller mutated its slices, want %q", cmd.Args(), want)
 	}
 }
