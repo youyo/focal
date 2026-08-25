@@ -60,7 +60,15 @@ func upstreamToken(o serveOptions) string {
 	if o.upstreamToken != "" {
 		return o.upstreamToken
 	}
-	return os.Getenv(upstreamTokenEnv)
+	token := os.Getenv(upstreamTokenEnv)
+	// Every ssh(1) focal starts inherits this process's environment, and
+	// focal deliberately honours the operator's own ~/.ssh/config — a
+	// "SendEnv FOCAL_*" there would carry the shared secret to the very
+	// hosts focal is inspecting. The variable has been read, so drop it:
+	// nothing downstream reads it again, and what is not in the environment
+	// cannot be forwarded or read out of /proc/<pid>/environ.
+	os.Unsetenv(upstreamTokenEnv)
+	return token
 }
 
 // upstreamAuth is the check itself: the expected token, reduced once at
