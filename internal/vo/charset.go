@@ -26,7 +26,12 @@ func newCharSet(spec string) charSet {
 	var s charSet
 	for i := 0; i < len(spec); i++ {
 		if i+2 < len(spec) && spec[i+1] == '-' {
-			for b := spec[i]; b <= spec[i+2]; b++ {
+			// The counter is an int, not a byte: "b <= hi" with a byte
+			// counter never goes false for a range ending at 0xff, and
+			// the loop would spin forever. Every spec in this package
+			// is a constant well below that today, so this is about
+			// the next one.
+			for b := int(spec[i]); b <= int(spec[i+2]); b++ {
 				s[b] = true
 			}
 			i += 2

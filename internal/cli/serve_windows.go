@@ -4,7 +4,14 @@ package cli
 
 import (
 	"net"
+	"os"
+
+	"github.com/youyo/focal/internal/result"
 )
+
+// checkDirOwner has nothing to say on Windows, where listenUnixSocket refuses
+// the socket form outright and no path is ever checked for one.
+func checkDirOwner(_ string, _ os.FileInfo) *result.Error { return nil }
 
 // listenUnixSocket refuses on Windows, where focal cannot make the promise the
 // socket form is for.

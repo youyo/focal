@@ -5,12 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+# The default GITHUB_TOKEN scope is whatever the repository setting says, which
+# on an older repository is still write-all. CI only ever needs to read the
+# tree, so it says so here rather than relying on that setting.
+permissions: {}
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The steps below run code from the checked-out tree; leaving the
+          # token in .git/config would put it within reach of all of it.
+          persist-credentials: false
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: mise run build
       - run: mise run test
       - run: mise run test-race
@@ -21,7 +32,11 @@ jobs:
     # needs docker (preinstalled on ubuntu-latest) and stays a separate job from
     # the docker-free build/test/lint above.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: mise run e2e

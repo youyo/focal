@@ -95,6 +95,21 @@ const (
 	// runs, so this deadline can only fire on a response that was never
 	// going to arrive.
 	serveWriteFactor = 12
+	// serveMaxInFlight is how many requests focal will work on at once.
+	//
+	// A request is not a cheap thing to accept: one `inspect` fans out to
+	// six sub-operations and seventeen separate ssh(1) processes, each with
+	// its own connection and handshake and its own output budget. Nothing
+	// below this bounds that, so without a ceiling here a caller that simply
+	// keeps asking turns into hundreds of concurrent ssh processes against
+	// the inspected host and a matching pile of buffered output on this one.
+	//
+	// Eight is chosen to be comfortably more than an agent asking questions
+	// one after another needs, and far less than what makes focal look like
+	// a source of trouble to the host it is pointed at. Requests over the
+	// ceiling wait rather than fail, so a burst is slowed instead of being
+	// turned into errors the agent has to reason about.
+	serveMaxInFlight = 8
 )
 
 // serveOptions is what `focal serve` was started with.
@@ -208,6 +223,16 @@ func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 		Version:     buildVersion(),
 		DefaultUser: o.user,
 	})
+	// A browser the operator did not ask for is as much a caller as the
+	// proxy is, and on a loopback bind it is the likelier one: any page the
+	// operator visits can reach 127.0.0.1. CrossOriginProtection refuses a
+	// request a browser has labelled cross-site, and lets through the ones
+	// that carry no such label at all, which is every non-browser MCP client.
+	// The SDK's own rebinding guard only compares Host against the listener,
+	// so it lapses exactly when --allow-unauthenticated-listen is used; this
+	// does not depend on the address focal bound.
+	handler = http.NewCrossOriginProtection().Handler(handler)
+	handler = limitInFlight(handler, serveMaxInFlight)
 	if auth != nil {
 		handler = auth.wrap(handler)
 		if o.upstreamToken != "" {
@@ -222,6 +247,29 @@ func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 		}
 	}
 	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor}, nil
+}
+
+// limitInFlight caps how many requests are being worked on at once, holding the
+// rest at the door.
+//
+// It sits inside the shared-secret check, so a request that never proved it may
+// be here does not get to occupy one of the slots — otherwise the ceiling would
+// be a way to keep the ones that did prove it waiting.
+//
+// A waiting request that gives up before its turn is dropped rather than run:
+// by then the client is gone, and starting seventeen ssh processes for an answer
+// nobody will read is the exact thing the ceiling exists to prevent.
+func limitInFlight(next http.Handler, n int) http.Handler {
+	slots := make(chan struct{}, n)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+			next.ServeHTTP(w, r)
+		case <-r.Context().Done():
+			http.Error(w, "server is busy\n", http.StatusServiceUnavailable)
+		}
+	})
 }
 
 // listen applies focal's bind policy and returns the bound listener.
@@ -346,11 +394,41 @@ func checkUnixSocketPath(path string) *result.Error {
 	if !info.IsDir() {
 		return invalidUnixSocketPath("%q is not a directory", dir)
 	}
-	if mode := info.Mode(); mode&os.ModeSticky == 0 && mode.Perm()&0o022 != 0 {
-		return invalidUnixSocketPath(
-			"%q can be written by users other than its owner, who could replace the socket in it", dir)
+	// Checking only the immediate parent is not enough: whoever can write to
+	// any directory on the way to it can rename that directory aside and put
+	// their own in its place, socket and all, and the parent focal then
+	// inspects is the one they built. So every ancestor is judged by the same
+	// rule as the parent.
+	//
+	// The chain is resolved first rather than each component being refused for
+	// being a symlink, because a legitimate one is normal — /tmp is a symlink
+	// to /private/tmp on macOS. Resolving is what makes the components below
+	// the real ones; refusing a writable one is what keeps them from changing
+	// between here and the bind.
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return invalidUnixSocketPath("cannot use the directory %q: %s", dir, err.Error())
 	}
-	return nil
+	for cur := resolved; ; cur = filepath.Dir(cur) {
+		info, err := os.Lstat(cur)
+		if err != nil {
+			return invalidUnixSocketPath("cannot use the directory %q: %s", cur, err.Error())
+		}
+		if mode := info.Mode(); mode&os.ModeSticky == 0 && mode.Perm()&0o022 != 0 {
+			return invalidUnixSocketPath(
+				"%q can be written by users other than its owner, who could replace the socket in it", cur)
+		}
+		// A directory owned by someone else is theirs to replace whatever
+		// its mode says, so the mode alone does not settle it. root is
+		// accepted because every path starts under directories root owns.
+		if err := checkDirOwner(cur, info); err != nil {
+			return err
+		}
+		if parent := filepath.Dir(cur); parent != cur {
+			continue
+		}
+		return nil
+	}
 }
 
 // clearStaleSocket makes path ready to bind.

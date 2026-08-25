@@ -169,7 +169,15 @@ func configPath() (string, *result.Error) {
 // path such as --config — a missing file is instead a config_not_found error,
 // since a path the caller typed is a promise that something is there.
 func readConfigFile(path string, requireExists bool) ([]byte, *result.Error) {
-	info, err := os.Stat(path)
+	// The file is opened before it is judged, and judged through that open
+	// descriptor. Stat-then-read is two separate resolutions of the same
+	// path, and what was measured and permission-checked need not be what is
+	// read if anything can move at the path in between; a descriptor refers
+	// to one file for as long as it is held.
+	//
+	// #nosec G304 -- path is Focal's own config location, derived from
+	// XDG_CONFIG_HOME or the home directory, not from a request.
+	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		if requireExists {
 			return nil, result.ValidationError(
@@ -180,6 +188,11 @@ func readConfigFile(path string, requireExists bool) ([]byte, *result.Error) {
 		}
 		return nil, nil
 	}
+	if err != nil {
+		return nil, result.ValidationError("unreadable_config", "cannot read the config file: "+err.Error(), "", nil)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
 	if err != nil {
 		return nil, result.ValidationError("unreadable_config", "cannot read the config file: "+err.Error(), "", nil)
 	}
@@ -200,9 +213,15 @@ func readConfigFile(path string, requireExists bool) ([]byte, *result.Error) {
 			"", []string{"0600", "0644"},
 		)
 	}
-	// #nosec G304 -- path is Focal's own config location, derived from
-	// XDG_CONFIG_HOME or the home directory, not from a request.
-	data, err := os.ReadFile(path)
+	// A mode of 0644 says only that the owner alone may write it. Whose file
+	// it is has to be asked separately: a config placed by another user in a
+	// directory focal can reach is theirs to change, and it decides which
+	// operations are enabled, whether they escalate with sudo, and which key
+	// focal connects with.
+	if permErr := checkConfigOwner(path, info); permErr != nil {
+		return nil, permErr
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes))
 	if err != nil {
 		return nil, result.ValidationError("unreadable_config", "cannot read the config file: "+err.Error(), "", nil)
 	}
