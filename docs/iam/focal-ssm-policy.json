@@ -8,7 +8,7 @@
       "Resource": "arn:aws:ec2:*:*:instance/*",
       "Condition": {
         "StringEquals": {
-          "aws:ResourceTag/FocalAccess": "true"
+          "ssm:resourceTag/FocalAccess": "true"
         }
       }
     },
