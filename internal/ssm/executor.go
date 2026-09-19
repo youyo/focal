@@ -90,6 +90,14 @@ var _ ssh.Executor = (*Executor)(nil)
 // New validates the execution parameters and loads the AWS SDK's default
 // configuration chain once, at startup, the same way ssh.NewOpenSSH validates
 // its own Options before any host is contacted.
+//
+// The region is the one piece of that chain worth checking explicitly.
+// LoadDefaultConfig does not fall back to the EC2 instance metadata service
+// for a region on its own, so on an EC2 host with AWS_REGION unset the chain
+// would otherwise resolve to an empty region and fail later, deep inside
+// SendCommand, with an error that does not say why. WithEC2IMDSRegion adds
+// that fallback, and an empty region even after it is reported here, at
+// startup, as the one thing an operator needs to set.
 func New(ctx context.Context, opts Options) (*Executor, *result.Error) {
 	switch {
 	case opts.Timeout <= 0:
@@ -99,11 +107,27 @@ func New(ctx context.Context, opts Options) (*Executor, *result.Error) {
 		return nil, result.ValidationError("invalid_max_output", "execution max_output must be positive",
 			"execution.max_output", []string{"a positive number of bytes"})
 	}
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithEC2IMDSRegion())
 	if err != nil {
 		return nil, result.ExecutionError("aws_config_failed", "cannot load AWS configuration: "+err.Error())
 	}
+	if regionErr := checkRegion(cfg); regionErr != nil {
+		return nil, regionErr
+	}
 	return &Executor{api: ssm.NewFromConfig(cfg), opts: opts, pollInterval: defaultPollInterval}, nil
+}
+
+// checkRegion is the one thing about the loaded configuration this package
+// verifies itself, pulled out as a pure function so it can be tested against
+// a config literal rather than against whatever this machine's real
+// environment and IMDS reachability happen to resolve to.
+func checkRegion(cfg aws.Config) *result.Error {
+	if cfg.Region == "" {
+		return result.ExecutionError("aws_region_not_set",
+			"cannot determine the AWS region: set AWS_REGION (or AWS_DEFAULT_REGION), "+
+				"or run on an EC2 instance whose IMDS reports one")
+	}
+	return nil
 }
 
 // Execute runs cmd against target, an EC2 instance ID. It applies the

@@ -305,3 +305,21 @@ func TestNewValidatesOptions(t *testing.T) {
 		t.Error("New accepted a zero max_output")
 	}
 }
+
+// TestCheckRegionRejectsEmpty pins the error New returns when the AWS SDK's
+// default chain — even with the EC2 IMDS fallback New adds — resolves to no
+// region at all, the case an EC2 host with AWS_REGION unset would otherwise
+// hit only much later, inside SendCommand, with a message that does not say
+// why. It is tested against an aws.Config literal rather than through New
+// itself, since New's own call to LoadDefaultConfig depends on this
+// machine's real environment and IMDS reachability.
+func TestCheckRegionRejectsEmpty(t *testing.T) {
+	if err := checkRegion(aws.Config{Region: ""}); err == nil {
+		t.Fatal("checkRegion accepted an empty region")
+	} else if err.Code != "aws_region_not_set" {
+		t.Errorf("code = %q, want aws_region_not_set", err.Code)
+	}
+	if err := checkRegion(aws.Config{Region: "us-east-1"}); err != nil {
+		t.Errorf("checkRegion rejected a set region: %v", err)
+	}
+}

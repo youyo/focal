@@ -126,8 +126,11 @@ EC2 側の要件:
 - SSM の Custom Document は不要です。Focal は AWS 標準の `AWS-RunShellScript` のみを使います
 
 Focal を動かす側（IAM）の要件: AWS SDK 標準の認証チェーン（環境変数 / `~/.aws/credentials` /
-EC2 instance profile）と `AWS_REGION`（または `AWS_DEFAULT_REGION`）が必要です。Focal 自身には
-プロファイルやリージョンを指定するフラグ・設定はありません。必要な IAM 権限は最小権限のサンプルを
+EC2 instance profile）と、リージョンの指定が必要です。`AWS_REGION`（または `AWS_DEFAULT_REGION`）が
+未設定の場合、Focal が EC2 インスタンス上で動いていれば instance metadata service（IMDS）から
+リージョンを取得しますが、それでも決められない場合は `SendCommand` を試みる前に明確なエラーを
+返します。Focal 自身にはプロファイルやリージョンを指定するフラグ・設定はありません。
+必要な IAM 権限は最小権限のサンプルを
 [`docs/iam/focal-ssm-policy.json`](docs/iam/focal-ssm-policy.json) に置いています
 （`ssm:SendCommand` はタグ条件付きの instance ARN と `AWS-RunShellScript` document の2ステートメント、
 `ssm:GetCommandInvocation` / `ssm:CancelCommand` は `Resource: "*"`）。
