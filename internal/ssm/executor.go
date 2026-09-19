@@ -191,6 +191,13 @@ func (e *Executor) poll(ctx context.Context, commandID, instanceID string) (ssh.
 			var notExist *types.InvocationDoesNotExist
 			if errors.As(err, &notExist) {
 				if waitErr := e.wait(ctx); waitErr != nil {
+					// SendCommand already succeeded — the invocation record
+					// simply had not propagated yet — so the command may
+					// still be running on the instance even though this
+					// poll loop is about to give up. The same best-effort
+					// cancel the other two exit paths below make applies
+					// here too.
+					e.cancelBestEffort(commandID, instanceID)
 					return ssh.Output{}, waitErr
 				}
 				continue
@@ -254,17 +261,42 @@ func (e *Executor) evaluate(inv *ssm.GetCommandInvocationOutput) (ssh.Output, bo
 func (e *Executor) finish(inv *ssm.GetCommandInvocationOutput) ssh.Output {
 	stdout := aws.ToString(inv.StandardOutputContent)
 	stderr := aws.ToString(inv.StandardErrorContent)
-	truncated := strings.HasSuffix(stdout, truncationMarker) ||
+	truncatedBySSM := strings.HasSuffix(stdout, truncationMarker) ||
 		strings.HasSuffix(stderr, truncationMarker) ||
 		len(stdout) >= ssmStdoutLimit ||
-		len(stderr) >= ssmStderrLimit ||
-		int64(len(stdout))+int64(len(stderr)) >= e.opts.MaxOutput
+		len(stderr) >= ssmStderrLimit
+
+	stdout, stderr, cappedByMaxOutput := capOutput(stdout, stderr, e.opts.MaxOutput)
+
 	return ssh.Output{
 		Stdout:    stdout,
 		Stderr:    stderr,
 		ExitCode:  int(inv.ResponseCode),
-		Truncated: truncated,
+		Truncated: truncatedBySSM || cappedByMaxOutput,
 	}
+}
+
+// capOutput bounds stdout and stderr to a shared byte budget, the same
+// meaning Options.MaxOutput carries for ssh.OpenSSH's own outputCap: the most
+// output a single command may hand back combined, across both streams, not a
+// ceiling applied to each one separately. Unlike OpenSSH's executor, SSM has
+// already delivered both streams as complete strings by the time this runs —
+// there is no live process to stop early — so the budget is applied by
+// slicing rather than by capping a writer mid-stream. stdout is kept whole
+// first and stderr absorbs whatever the budget has left, which is arbitrary
+// but deterministic: the two streams were never interleaved in the first
+// place, so there is no original order for a cut to preserve.
+func capOutput(stdout, stderr string, budget int64) (string, string, bool) {
+	stdoutLen, stderrLen := int64(len(stdout)), int64(len(stderr))
+	if stdoutLen+stderrLen <= budget {
+		return stdout, stderr, false
+	}
+	if stdoutLen >= budget {
+		// New rejects a non-positive Options.MaxOutput, so budget is always
+		// positive here and stdout[:budget] is always a valid slice.
+		return stdout[:budget], "", true
+	}
+	return stdout, stderr[:budget-stdoutLen], true
 }
 
 // wait pauses for one poll interval, or returns early with an error when ctx

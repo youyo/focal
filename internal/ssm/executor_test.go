@@ -3,6 +3,7 @@ package ssm
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +126,67 @@ func TestExecuteSuccess(t *testing.T) {
 	}
 }
 
+// TestExecuteTruncatesOutputToMaxOutput pins that MaxOutput is an enforced
+// ceiling, not just a flag: the combined stdout+stderr focal reports back
+// must actually be cut to the budget, the same guarantee ssh.OpenSSH's own
+// outputCap gives — an agent reading Stdout/Stderr never sees more than
+// MaxOutput bytes, regardless of how much the remote command produced.
+func TestExecuteTruncatesOutputToMaxOutput(t *testing.T) {
+	fake := &fakeAPI{invocations: map[string][]invocationStep{
+		"cmd-1": {successInvocation(strings.Repeat("o", 800), strings.Repeat("e", 800), 0)},
+	}}
+	e := newTestExecutor(t, fake) // MaxOutput: 1024
+	out, err := e.Execute(context.Background(), testTarget(t), mustCmd(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !out.Truncated {
+		t.Error("Truncated = false, want true")
+	}
+	if got := len(out.Stdout) + len(out.Stderr); int64(got) != 1024 {
+		t.Errorf("len(Stdout)+len(Stderr) = %d, want exactly MaxOutput (1024)", got)
+	}
+	if out.Stdout != strings.Repeat("o", 800) {
+		t.Errorf("Stdout was cut even though it fit within the budget on its own: %d bytes", len(out.Stdout))
+	}
+	if len(out.Stderr) != 224 {
+		t.Errorf("len(Stderr) = %d, want the 224 bytes left in the budget after stdout", len(out.Stderr))
+	}
+}
+
+func TestCapOutput(t *testing.T) {
+	tests := []struct {
+		name           string
+		stdout, stderr string
+		budget         int64
+		wantStdout     string
+		wantStderr     string
+		wantTruncated  bool
+	}{
+		{name: "under budget", stdout: "abc", stderr: "de", budget: 10, wantStdout: "abc", wantStderr: "de"},
+		{name: "exactly at budget", stdout: "abc", stderr: "de", budget: 5, wantStdout: "abc", wantStderr: "de"},
+		{
+			name: "stderr alone is cut", stdout: "abc", stderr: "defgh", budget: 5,
+			wantStdout: "abc", wantStderr: "de", wantTruncated: true,
+		},
+		{
+			name: "stdout alone exceeds the budget", stdout: "abcdefgh", stderr: "xyz", budget: 4,
+			wantStdout: "abcd", wantStderr: "", wantTruncated: true,
+		},
+		{name: "empty budget edge, stdout empty", stdout: "", stderr: "", budget: 1, wantStdout: "", wantStderr: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStdout, gotStderr, gotTruncated := capOutput(tt.stdout, tt.stderr, tt.budget)
+			if gotStdout != tt.wantStdout || gotStderr != tt.wantStderr || gotTruncated != tt.wantTruncated {
+				t.Errorf("capOutput(%q, %q, %d) = (%q, %q, %t), want (%q, %q, %t)",
+					tt.stdout, tt.stderr, tt.budget, gotStdout, gotStderr, gotTruncated,
+					tt.wantStdout, tt.wantStderr, tt.wantTruncated)
+			}
+		})
+	}
+}
+
 func TestExecuteFailedIsNotAnError(t *testing.T) {
 	fake := &fakeAPI{invocations: map[string][]invocationStep{
 		"cmd-1": {successInvocation("", "boom\n", 7)},
@@ -196,6 +258,36 @@ func TestExecuteRetriesTransientInvocationDoesNotExist(t *testing.T) {
 	}
 	if len(fake.invCalls) != 3 {
 		t.Errorf("GetCommandInvocation called %d times, want 3", len(fake.invCalls))
+	}
+}
+
+// TestExecuteContextCancelDuringInvocationDoesNotExistCallsCancelCommand
+// covers the poll loop's other wait: SendCommand already succeeded when the
+// context ends while GetCommandInvocation is still returning
+// InvocationDoesNotExist (the record has not propagated yet), so the same
+// best-effort CancelCommand the other two exit paths make must happen here
+// too, or a command could keep running on the instance with nothing focal
+// asked to stop it.
+func TestExecuteContextCancelDuringInvocationDoesNotExistCallsCancelCommand(t *testing.T) {
+	fake := &fakeAPI{invocations: map[string][]invocationStep{
+		"cmd-1": {
+			{err: &types.InvocationDoesNotExist{}},
+			{err: &types.InvocationDoesNotExist{}},
+			{err: &types.InvocationDoesNotExist{}},
+		},
+	}}
+	e := newTestExecutor(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+	_, err := e.Execute(ctx, testTarget(t), mustCmd(t))
+	if err == nil {
+		t.Fatal("Execute returned no error for a canceled context")
+	}
+	if len(fake.cancelCalls) == 0 {
+		t.Error("CancelCommand was not called after the context was canceled while polling InvocationDoesNotExist")
 	}
 }
 
