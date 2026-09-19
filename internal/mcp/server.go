@@ -135,7 +135,17 @@ func (s *server) call(ctx context.Context, name string, args toolArgs) (*sdk.Cal
 		)), nil, nil
 	}
 
-	target, err := resolveTarget(dest.Host, dest.User, s.opts.DefaultUser)
+	// The server-wide default user is an ssh(1) concept: applying it to an
+	// ssm call would silently turn a plain instance ID into "user@i-...",
+	// which this package's own dest.User check just refused when the call
+	// named a user explicitly. Composing it here as instead of there would
+	// let the same refusal be bypassed through the server's own default
+	// rather than through the call, so it is suppressed the same way.
+	defaultUser := s.opts.DefaultUser
+	if transport == vo.TransportSSM {
+		defaultUser = ""
+	}
+	target, err := resolveTarget(dest.Host, dest.User, defaultUser)
 	if err != nil {
 		return toolError(err), nil, nil
 	}

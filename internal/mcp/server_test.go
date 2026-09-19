@@ -442,6 +442,31 @@ func TestDefaultUserAppliesWhenTheCallNamesNone(t *testing.T) {
 	}
 }
 
+// TestDefaultUserIsNotAppliedToSSMTargets pins the fix for the bug the server
+// default user would otherwise cause: composing "ec2-user@i-..." for a call
+// naming no user of its own, which internal/ssm's own second-layer target
+// check would then refuse as an instance ID it does not recognise. The
+// server default is an ssh(1) concept and must not silently reach an ssm
+// call at all.
+func TestDefaultUserIsNotAppliedToSSMTargets(t *testing.T) {
+	url, runner := serverFor(t, "execution:\n  transports: [ssh, ssm]\n", Options{DefaultUser: "ec2-user"})
+
+	callTool(t, url, "inspect_system", map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm"})
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner saw %d calls, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].target.String(); got != "i-0123456789abcdef0" {
+		t.Errorf("target = %q, want the instance ID with no server default user composed in", got)
+	}
+
+	// The same server default still applies to an ssh call, so the fix is
+	// scoped to ssm and does not disable the feature entirely.
+	callTool(t, url, "inspect_system", map[string]any{"host": "web"})
+	if got := runner.calls[1].target.String(); got != "ec2-user@web" {
+		t.Errorf("target = %q, want the server default still applied to ssh", got)
+	}
+}
+
 func TestValidationErrorIsAToolErrorNotAProtocolError(t *testing.T) {
 	url, runner := serverFor(t, "", Options{})
 
