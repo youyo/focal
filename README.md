@@ -129,7 +129,11 @@ Focal を動かす側（IAM）の要件: AWS SDK 標準の認証チェーン（�
 EC2 instance profile）と、リージョンの指定が必要です。`AWS_REGION`（または `AWS_DEFAULT_REGION`）が
 未設定の場合、Focal が EC2 インスタンス上で動いていれば instance metadata service（IMDS）から
 リージョンを取得しますが、それでも決められない場合は `SendCommand` を試みる前に明確なエラーを
-返します。Focal 自身にはプロファイルやリージョンを指定するフラグ・設定はありません。
+返します。**EC2 インスタンス上で動いていない環境**（ラップトップ等）で `AWS_REGION` /
+`AWS_DEFAULT_REGION` を設定せずに `--transport ssm` を使うと、IMDS への到達を試みて失敗するまで
+数秒待たされます（未設定・ネットワーク到達不可な環境での実測で約4.5秒）。IMDS 自体を使わないと
+分かっている場合は `AWS_EC2_METADATA_DISABLED=true` を設定するとこの待ちを省けます。
+Focal 自身にはプロファイルやリージョンを指定するフラグ・設定はありません。
 必要な IAM 権限は最小権限のサンプルを
 [`docs/iam/focal-ssm-policy.json`](docs/iam/focal-ssm-policy.json) に置いています
 （`ssm:SendCommand` はタグ条件付きの instance ARN と `AWS-RunShellScript` document の2ステートメント、
@@ -363,6 +367,9 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - **中央 broker 構成** — 複数の `focal serve` をまとめて管理する構成
 - **SSM transport の S3 出力対応** — AWS 側の固定上限（stdout 24000 / stderr 8000 文字）を超える
   完全な出力を S3 経由で取得できるようにする
+- **SSM の SDK config を serve プロセスで共有** — 現状 `ssm.New`（`config.LoadDefaultConfig` と
+  IMDS リージョン解決を含む）は CLI の1回の実行、または `focal serve` の tool call ごとに
+  毎回呼ばれる。`focal serve` プロセス起動時に一度だけ解決して使い回すようにする
 
 ## Development
 
