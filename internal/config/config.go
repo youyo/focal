@@ -40,6 +40,7 @@ type Config struct {
 	maxOutput    int64
 	port         int
 	identityFile string
+	transports   map[vo.Transport]bool
 	operations   map[string]Operation
 }
 
@@ -55,6 +56,12 @@ func (c Config) Port() int { return c.port }
 // IdentityFile is the private key path with a leading ~/ already expanded, or
 // the empty string when the choice is left to OpenSSH.
 func (c Config) IdentityFile() string { return c.identityFile }
+
+// TransportEnabled reports whether this installation offers t at all. An
+// administrator opts a transport in through execution.transports; ssh alone
+// is the default, so a caller asking for ssm against an unmodified
+// configuration is refused here before any AWS credential is even loaded.
+func (c Config) TransportEnabled(t vo.Transport) bool { return c.transports[t] }
 
 // Operation returns the settings for one operation. The second result is false
 // for a name Focal does not implement.
@@ -96,10 +103,11 @@ type rawConfig struct {
 }
 
 type rawExecution struct {
-	Timeout      *string `yaml:"timeout"`
-	MaxOutput    *string `yaml:"max_output"`
-	Port         *int    `yaml:"port"`
-	IdentityFile *string `yaml:"identity_file"`
+	Timeout      *string   `yaml:"timeout"`
+	MaxOutput    *string   `yaml:"max_output"`
+	Port         *int      `yaml:"port"`
+	IdentityFile *string   `yaml:"identity_file"`
+	Transports   *[]string `yaml:"transports"`
 }
 
 type rawOperation struct {
@@ -249,6 +257,7 @@ func build(raw rawConfig) (Config, *result.Error) {
 	cfg := Config{
 		timeout:    defaultTimeout,
 		maxOutput:  defaultMaxOutput,
+		transports: defaultTransports(),
 		operations: make(map[string]Operation, len(defaultOperations)),
 	}
 	if err := cfg.applyExecution(raw.Execution); err != nil {
@@ -327,7 +336,46 @@ func (c *Config) applyExecution(raw *rawExecution) *result.Error {
 		}
 		c.identityFile = path
 	}
+	if raw.Transports != nil {
+		set, err := parseTransportSet(*raw.Transports)
+		if err != nil {
+			return err
+		}
+		c.transports = set
+	}
 	return nil
+}
+
+// parseTransportSet validates execution.transports: every name must be one
+// vo.ParseTransport accepts, no name may repeat, and the list may not be
+// empty — an administrator who writes the key at all must name at least one
+// transport, rather than accidentally disabling every one of them.
+func parseTransportSet(names []string) (map[vo.Transport]bool, *result.Error) {
+	if len(names) == 0 {
+		return nil, result.ValidationError(
+			"empty_transports",
+			"execution.transports must name at least one transport",
+			"execution.transports",
+			vo.TransportNames(),
+		)
+	}
+	set := make(map[vo.Transport]bool, len(names))
+	for _, name := range names {
+		t, err := vo.ParseTransport(name)
+		if err != nil {
+			return nil, atField(err, "execution.transports")
+		}
+		if set[t] {
+			return nil, result.ValidationError(
+				"duplicate_transport",
+				fmt.Sprintf("transport %q is listed more than once", name),
+				"execution.transports",
+				vo.TransportNames(),
+			)
+		}
+		set[t] = true
+	}
+	return set, nil
 }
 
 // resolveIdentityFile expands a leading ~/ the way OpenSSH does and refuses a

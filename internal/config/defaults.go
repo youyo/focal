@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	"github.com/youyo/focal/internal/vo"
+)
 
 // The bounds and fallbacks Focal applies to a config file. Every one of these
 // is a limit on what an administrator may ask for, so they live together here
@@ -23,6 +27,16 @@ const (
 	// graph, so the ceiling has to be applied to the bytes on disk.
 	maxConfigBytes = 1 << 20
 )
+
+// defaultTransports is what focal runs with when the config file names no
+// execution.transports: ssh, and ssh alone. An administrator must opt a host
+// into ssm explicitly — the setting can only add to this set, and only to
+// the values vo.ParseTransport accepts, so a typo is a startup error rather
+// than a transport nobody asked for being silently unavailable or, worse,
+// silently available.
+func defaultTransports() map[vo.Transport]bool {
+	return map[vo.Transport]bool{vo.TransportSSH: true}
+}
 
 // lineStreamLimits declares which operations read a stream long enough to need
 // line and age limits, and the ceilings Focal applies when the config file
