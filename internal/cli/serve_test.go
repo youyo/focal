@@ -17,16 +17,19 @@ import (
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/ssh"
 	"github.com/youyo/focal/internal/sshtest"
+	"github.com/youyo/focal/internal/ssm"
+	"github.com/youyo/focal/internal/vo"
 )
 
 // serveApp builds an app whose executor is a Recorder, and reports what the
 // serve command wrote to stderr and which connection options each executor was
 // built from.
 type serveApp struct {
-	app      *app
-	stderr   *bytes.Buffer
-	recorder *sshtest.Recorder
-	opts     []ssh.Options
+	app        *app
+	stderr     *bytes.Buffer
+	recorder   *sshtest.Recorder
+	opts       []ssh.Options
+	transports []vo.Transport
 }
 
 func newServeApp(t *testing.T) *serveApp {
@@ -35,8 +38,9 @@ func newServeApp(t *testing.T) *serveApp {
 	s.app = &app{
 		stdout: &bytes.Buffer{},
 		stderr: s.stderr,
-		newExecutor: func(opts ssh.Options) (ssh.Executor, *result.Error) {
+		newExecutor: func(_ context.Context, transport vo.Transport, opts ssh.Options, _ ssm.Options) (ssh.Executor, *result.Error) {
 			s.opts = append(s.opts, opts)
+			s.transports = append(s.transports, transport)
 			return s.recorder, nil
 		},
 	}

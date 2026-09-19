@@ -18,6 +18,7 @@ import (
 	"github.com/youyo/focal/internal/operation"
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/ssh"
+	"github.com/youyo/focal/internal/ssm"
 	"github.com/youyo/focal/internal/vo"
 )
 
@@ -570,7 +571,7 @@ type serveRunner struct {
 
 var _ mcp.Runner = (*serveRunner)(nil)
 
-func (r *serveRunner) Run(ctx context.Context, op operation.Operation, target vo.Target, identity string) (result.Envelope, *result.Error) {
+func (r *serveRunner) Run(ctx context.Context, op operation.Operation, target vo.Target, identity string, transport vo.Transport) (result.Envelope, *result.Error) {
 	opts := ssh.Options{
 		Timeout:      r.cfg.Timeout(),
 		MaxOutput:    r.cfg.MaxOutput(),
@@ -587,7 +588,7 @@ func (r *serveRunner) Run(ctx context.Context, op operation.Operation, target vo
 		opts.IdentityFile = path
 	}
 
-	executor, err := r.newExecutor(opts)
+	executor, err := r.newExecutor(ctx, transport, opts, ssm.Options{Timeout: opts.Timeout, MaxOutput: opts.MaxOutput})
 	if err != nil {
 		return result.Envelope{}, err
 	}

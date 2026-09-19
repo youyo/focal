@@ -27,27 +27,38 @@ import (
 	"github.com/youyo/focal/internal/operation"
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/ssh"
+	"github.com/youyo/focal/internal/ssm"
 	"github.com/youyo/focal/internal/vo"
 )
 
 // Execute runs focal with args (os.Args[1:]) and returns the process exit
 // code. It is the whole of this package's public surface.
 func Execute(args []string, stdout, stderr io.Writer) int {
-	return (&app{stdout: stdout, stderr: stderr, newExecutor: newOpenSSH}).run(args)
+	return (&app{stdout: stdout, stderr: stderr, newExecutor: defaultExecutor}).run(args)
 }
 
-// executorFactory builds the executor a run uses from the resolved connection
-// options. Production passes newOpenSSH; a test passes one that hands back an
-// sshtest.Recorder, which is how the argv focal would have sent is asserted
-// without a remote host.
-type executorFactory func(ssh.Options) (ssh.Executor, *result.Error)
+// executorFactory builds the executor a run uses, for whichever transport the
+// caller resolved. Production passes defaultExecutor; a test passes one that
+// hands back an sshtest.Recorder regardless of transport, which is how the
+// command focal would have sent is asserted without a remote host or an AWS
+// account.
+//
+// sshOpts and ssmOpts both carry the same resolved Timeout and MaxOutput;
+// only IdentityFile and Port are meaningful to ssh, since ssm has no notion
+// of either.
+type executorFactory func(ctx context.Context, transport vo.Transport, sshOpts ssh.Options, ssmOpts ssm.Options) (ssh.Executor, *result.Error)
 
-func newOpenSSH(opts ssh.Options) (ssh.Executor, *result.Error) {
-	ex, err := ssh.NewOpenSSH(opts)
-	if err != nil {
-		return nil, err
+// defaultExecutor is the production executorFactory: ssh(1) through
+// ssh.NewOpenSSH, or AWS SSM Run Command through ssm.New. A transport outside
+// vo's own enum cannot reach here — resolveTransport already refused it — so
+// the default case exists only to keep this function total.
+func defaultExecutor(ctx context.Context, transport vo.Transport, sshOpts ssh.Options, ssmOpts ssm.Options) (ssh.Executor, *result.Error) {
+	switch transport {
+	case vo.TransportSSM:
+		return ssm.New(ctx, ssmOpts)
+	default:
+		return ssh.NewOpenSSH(sshOpts)
 	}
-	return ex, nil
 }
 
 type app struct {
@@ -60,13 +71,14 @@ type app struct {
 // small and fixed: it covers how to reach the host and how to print the
 // answer, and nothing that could reach ssh_config.
 type globals struct {
-	identity string
-	port     int
-	user     string
-	timeout  time.Duration
-	config   string
-	pretty   bool
-	version  bool
+	identity  string
+	port      int
+	user      string
+	timeout   time.Duration
+	config    string
+	transport string
+	pretty    bool
+	version   bool
 }
 
 // run parses args and dispatches. Every failure leaves through the same place:
@@ -139,6 +151,8 @@ func (a *app) newRootCommand(g *globals) *cobra.Command {
 	flags.StringVarP(&g.user, "user", "l", "", "user to log in as, when HOST does not name one")
 	flags.DurationVar(&g.timeout, "timeout", 0, "ceiling on a single remote command, e.g. 30s")
 	flags.StringVar(&g.config, "config", "", "configuration file to read instead of the default location")
+	flags.StringVar(&g.transport, "transport", "ssh",
+		"how to reach HOST: ssh, or ssm (AWS SSM Run Command; HOST must then be an EC2 instance ID)")
 	// --json is the explicit spelling of what focal does anyway, so nothing
 	// binds or reads it: --pretty is the flag that changes the rendering, and
 	// the two are mutually exclusive, which is the whole of --json's effect.
@@ -201,9 +215,25 @@ func (a *app) dispatch(cmd *cobra.Command, g *globals, args []string) *cliError 
 		)
 	}
 
+	transport, transportErr := vo.ParseTransport(g.transport)
+	if transportErr != nil {
+		return rejected(transportErr)
+	}
+	if err := rejectSSHOnlyFlags(cmd, transport); err != nil {
+		return rejected(err)
+	}
+
 	cfg, cfgErr := loadConfig(g)
 	if cfgErr != nil {
 		return rejected(cfgErr)
+	}
+	if !cfg.TransportEnabled(transport) {
+		return rejected(result.PolicyError(
+			"transport_not_enabled",
+			fmt.Sprintf("transport %q is not enabled for this installation", transport),
+			"execution.transports",
+			[]string{"enable it in the configuration file"},
+		))
 	}
 	opCfg, known := cfg.Operation(name)
 	if !known {
@@ -246,16 +276,40 @@ func (a *app) dispatch(cmd *cobra.Command, g *globals, args []string) *cliError 
 	if optsErr != nil {
 		return rejected(optsErr)
 	}
-	executor, execErr := a.newExecutor(opts)
+	ctx := context.Background()
+	executor, execErr := a.newExecutor(ctx, transport, opts, ssm.Options{Timeout: opts.Timeout, MaxOutput: opts.MaxOutput})
 	if execErr != nil {
 		return rejected(execErr)
 	}
 
-	env, runErr := op.Execute(context.Background(), executor, target, opCfg.Policy())
+	env, runErr := op.Execute(ctx, executor, target, opCfg.Policy())
 	if runErr != nil {
 		return rejected(asResultError(runErr))
 	}
 	return writeEnvelope(a.stdout, env, g.pretty)
+}
+
+// rejectSSHOnlyFlags refuses --identity, --port and --user/-l when transport
+// is ssm. None of the three means anything to AWS SSM Run Command: there is
+// no ssh(1) client to hand a key or a port to, and the destination is an
+// instance ID rather than a [user@]host, so silently ignoring them would let
+// a caller believe a flag took effect when it never could.
+func rejectSSHOnlyFlags(cmd *cobra.Command, transport vo.Transport) *result.Error {
+	if transport != vo.TransportSSM {
+		return nil
+	}
+	flags := cmd.Flags()
+	for _, name := range []string{"identity", "port", "user"} {
+		if flags.Changed(name) {
+			return result.ValidationError(
+				"flag_not_supported_by_transport",
+				fmt.Sprintf("--%s cannot be used with --transport ssm", name),
+				"--"+name,
+				[]string{"omit --" + name + " or use --transport ssh"},
+			)
+		}
+	}
+	return nil
 }
 
 // resolveTarget builds the destination from HOST and -l. A HOST that already

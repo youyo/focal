@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -27,12 +28,17 @@ import (
 // to get there. It is embedded in each operation's argument type, so the three
 // properties are declared once and appear on every tool.
 type hostArgs struct {
-	Host string `json:"host" jsonschema:"the host to inspect, named exactly as ssh(1) takes it: an ssh_config alias, a hostname, an IP address, optionally with a leading user@"`
-	User string `json:"user,omitempty" jsonschema:"the user to log in as, when the host does not name one"`
+	Host string `json:"host" jsonschema:"the host to inspect, named exactly as ssh(1) takes it: an ssh_config alias, a hostname, an IP address, optionally with a leading user@; when transport is ssm, an EC2 instance ID such as i-0123456789abcdef0 instead"`
+	User string `json:"user,omitempty" jsonschema:"the user to log in as, when the host does not name one; not accepted when transport is ssm"`
 	// Identity is an alias, never a path: the aliases were registered when
 	// focal serve was started, so an agent can choose among the keys the
 	// operator offered without being able to name a file on the server.
-	Identity string `json:"identity,omitempty" jsonschema:"the alias of a private key registered with focal serve --identity; key file paths are not accepted"`
+	Identity string `json:"identity,omitempty" jsonschema:"the alias of a private key registered with focal serve --identity; key file paths are not accepted; not accepted when transport is ssm"`
+	// Transport chooses how focal reaches Host. It defaults to ssh so every
+	// existing call keeps meaning what it always has; an installation must
+	// opt in to ssm through execution.transports before a call naming it
+	// succeeds.
+	Transport string `json:"transport,omitempty" jsonschema:"how to reach host: ssh (default) or ssm; ssm means AWS SSM Run Command, and host must then be an EC2 instance ID"`
 }
 
 func (h hostArgs) destination() hostArgs { return h }
@@ -167,6 +173,41 @@ func add[In toolArgs](srv *sdk.Server, s *server, name, summary string) {
 // the caller meant is a decision focal has no basis to make. The assembled
 // string goes through vo.ParseTarget like any other, so a user name that
 // arrived on its own property is validated rather than trusted for it.
+// resolveCallTransport parses the call's transport property, defaulting to
+// ssh, and refuses identity or user alongside ssm: neither means anything to
+// AWS SSM Run Command, and silently ignoring one would let an agent believe a
+// property it set actually took effect.
+func resolveCallTransport(dest hostArgs) (vo.Transport, *result.Error) {
+	transport := vo.TransportSSH
+	if dest.Transport != "" {
+		var err *result.Error
+		transport, err = vo.ParseTransport(dest.Transport)
+		if err != nil {
+			return vo.TransportSSH, err
+		}
+	}
+	if transport != vo.TransportSSM {
+		return transport, nil
+	}
+	for _, unsupported := range []struct {
+		field string
+		set   bool
+	}{
+		{"identity", dest.Identity != ""},
+		{"user", dest.User != ""},
+	} {
+		if unsupported.set {
+			return vo.TransportSSH, result.ValidationError(
+				"field_not_supported_by_transport",
+				fmt.Sprintf("%q cannot be used with transport ssm", unsupported.field),
+				unsupported.field,
+				[]string{"omit " + unsupported.field + ", or use transport ssh"},
+			)
+		}
+	}
+	return transport, nil
+}
+
 func resolveTarget(host, user, defaultUser string) (vo.Target, *result.Error) {
 	switch {
 	case user != "":

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/ssh"
 	"github.com/youyo/focal/internal/sshtest"
+	"github.com/youyo/focal/internal/ssm"
+	"github.com/youyo/focal/internal/vo"
 )
 
 // run drives one invocation with a Recorder in place of a real SSH client and
@@ -21,12 +24,13 @@ import (
 // streams, the calls that reached the executor, and the connection options it
 // was built from.
 type runResult struct {
-	code   int
-	stdout string
-	stderr string
-	calls  []sshtest.Call
-	opts   ssh.Options
-	built  bool
+	code      int
+	stdout    string
+	stderr    string
+	calls     []sshtest.Call
+	opts      ssh.Options
+	transport vo.Transport
+	built     bool
 }
 
 func runCLI(t *testing.T, args ...string) runResult {
@@ -41,8 +45,8 @@ func runCLIWith(t *testing.T, rec *sshtest.Recorder, args ...string) runResult {
 	a := &app{
 		stdout: &stdout,
 		stderr: &stderr,
-		newExecutor: func(opts ssh.Options) (ssh.Executor, *result.Error) {
-			res.opts, res.built = opts, true
+		newExecutor: func(_ context.Context, transport vo.Transport, opts ssh.Options, _ ssm.Options) (ssh.Executor, *result.Error) {
+			res.opts, res.transport, res.built = opts, transport, true
 			return rec, nil
 		},
 	}
@@ -180,6 +184,87 @@ func TestLogs_DefaultsWhenFlagsOmitted(t *testing.T) {
 	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
 	if got := res.calls[0].Command.Args(); !slices.Equal(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+// TestTransport_DefaultsToSSH pins that an invocation naming no --transport
+// still resolves to ssh, so every existing call keeps behaving as it always
+// has.
+func TestTransport_DefaultsToSSH(t *testing.T) {
+	withConfig(t, "")
+
+	res := runCLI(t, "prod-web", "system")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.code, res.stderr)
+	}
+	if res.transport != vo.TransportSSH {
+		t.Errorf("transport = %s, want ssh", res.transport)
+	}
+}
+
+// TestTransport_SSMRefusedWhenNotEnabled is the config opt-in gate: ssh alone
+// is enabled by default, so a caller asking for ssm is refused before an
+// executor is ever built.
+func TestTransport_SSMRefusedWhenNotEnabled(t *testing.T) {
+	withConfig(t, "")
+
+	res := runCLI(t, "--transport", "ssm", "i-0123456789abcdef0", "system")
+	if res.code != exitRejected {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitRejected, res.stderr)
+	}
+	if res.built {
+		t.Error("an executor was built for a transport the configuration does not enable")
+	}
+	if got := decodeError(t, res); got.Code != "transport_not_enabled" {
+		t.Errorf("code = %q, want transport_not_enabled", got.Code)
+	}
+}
+
+// TestTransport_SSMBuildsWhenEnabled is the other half of the gate: once
+// execution.transports names ssm, the ssm executor factory is the one that
+// runs, and the CLI reaches it with the transport it resolved.
+func TestTransport_SSMBuildsWhenEnabled(t *testing.T) {
+	withConfig(t, "execution:\n  transports: [ssh, ssm]\n")
+
+	res := runCLI(t, "--transport", "ssm", "i-0123456789abcdef0", "system")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.code, res.stderr)
+	}
+	if !res.built {
+		t.Fatal("no executor was built")
+	}
+	if res.transport != vo.TransportSSM {
+		t.Errorf("transport = %s, want ssm", res.transport)
+	}
+}
+
+// TestTransport_SSMRejectsSSHOnlyFlags covers --identity, --port and --user:
+// none of them means anything to AWS SSM Run Command, so each is refused
+// before an executor is built rather than silently ignored.
+func TestTransport_SSMRejectsSSHOnlyFlags(t *testing.T) {
+	withConfig(t, "execution:\n  transports: [ssh, ssm]\n")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "identity", args: []string{"--transport", "ssm", "--identity", "/tmp/key", "i-0123456789abcdef0", "system"}}, // gitleaks:allow
+		{name: "port", args: []string{"--transport", "ssm", "--port", "2222", "i-0123456789abcdef0", "system"}},
+		{name: "user", args: []string{"--transport", "ssm", "--user", "ec2-user", "i-0123456789abcdef0", "system"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := runCLI(t, tt.args...)
+			if res.code != exitRejected {
+				t.Fatalf("exit code = %d, want %d; stderr=%s", res.code, exitRejected, res.stderr)
+			}
+			if res.built {
+				t.Error("an executor was built despite the rejected flag")
+			}
+			if got := decodeError(t, res); got.Code != "flag_not_supported_by_transport" {
+				t.Errorf("code = %q, want flag_not_supported_by_transport", got.Code)
+			}
+		})
 	}
 }
 

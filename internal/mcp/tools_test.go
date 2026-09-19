@@ -103,16 +103,16 @@ func TestSchemasExposeOnlyTypedParameters(t *testing.T) {
 	url, _ := serverFor(t, "operations:\n  kernel:\n    enabled: true\n", Options{})
 
 	allowed := map[string][]string{
-		"inspect":           {"host", "user", "identity"},
-		"inspect_system":    {"host", "user", "identity"},
-		"inspect_cpu":       {"host", "user", "identity"},
-		"inspect_memory":    {"host", "user", "identity"},
-		"inspect_storage":   {"host", "user", "identity"},
-		"inspect_network":   {"host", "user", "identity"},
-		"inspect_processes": {"host", "user", "identity", "name", "pid"},
-		"inspect_service":   {"host", "user", "identity", "service"},
-		"inspect_logs":      {"host", "user", "identity", "service", "since", "lines"},
-		"inspect_kernel":    {"host", "user", "identity", "since", "lines"},
+		"inspect":           {"host", "user", "identity", "transport"},
+		"inspect_system":    {"host", "user", "identity", "transport"},
+		"inspect_cpu":       {"host", "user", "identity", "transport"},
+		"inspect_memory":    {"host", "user", "identity", "transport"},
+		"inspect_storage":   {"host", "user", "identity", "transport"},
+		"inspect_network":   {"host", "user", "identity", "transport"},
+		"inspect_processes": {"host", "user", "identity", "transport", "name", "pid"},
+		"inspect_service":   {"host", "user", "identity", "transport", "service"},
+		"inspect_logs":      {"host", "user", "identity", "transport", "service", "since", "lines"},
+		"inspect_kernel":    {"host", "user", "identity", "transport", "since", "lines"},
 	}
 
 	for name, schema := range toolSchemas(t, url) {
