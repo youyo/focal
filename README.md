@@ -104,6 +104,68 @@ focal -i ~/.ssh/customer-a.pem -p 2222 -l ec2-user web01 kernel --since 1h
 
 接続設定の優先順位は **CLI のフラグ → 設定ファイル → `~/.ssh/config` / ssh(1) の既定値** です。
 
+## SSM transport
+
+SSH に到達できない環境（鍵配布が難しい、22番ポートを開けたくない、既に AWS Systems Manager で
+EC2 を管理している等）向けに、`ssh(1)` の代わりに AWS SSM Run Command（`AWS-RunShellScript`）で
+built-in operation を実行する transport です（[ADR 0007](docs/adr/0007-ssm-transport.md)）。
+HOST の意味以外、operation の意味・引数は SSH transport とまったく同じです。
+
+**設定ファイルで明示的に有効化する必要があります。**既定は `execution.transports: [ssh]` で、
+`ssm` を含めない限り CLI・MCP どちらからも呼び出しはエラーになります。
+
+```yaml
+execution:
+  transports: [ssh, ssm]   # 既定は [ssh] のみ。ssm を使うにはここに追加する
+```
+
+EC2 側の要件:
+
+- SSM Agent が動作していること（Amazon Linux 2/2023 など多くの公式 AMI にはプリインストール済み）
+- `AmazonSSMManagedInstanceCore` を含む instance profile がアタッチされていること
+- SSM の Custom Document は不要です。Focal は AWS 標準の `AWS-RunShellScript` のみを使います
+
+Focal を動かす側（IAM）の要件: AWS SDK 標準の認証チェーン（環境変数 / `~/.aws/credentials` /
+EC2 instance profile）と、リージョンの指定が必要です。`AWS_REGION`（または `AWS_DEFAULT_REGION`）が
+未設定の場合、Focal が EC2 インスタンス上で動いていれば instance metadata service（IMDS）から
+リージョンを取得しますが、それでも決められない場合は `SendCommand` を試みる前に明確なエラーを
+返します。**EC2 インスタンス上で動いていない環境**（ラップトップ等）で `AWS_REGION` /
+`AWS_DEFAULT_REGION` を設定せずに `--transport ssm` を使うと、IMDS への到達を試みて失敗するまで
+数秒待たされます（未設定・ネットワーク到達不可な環境での実測で約4.5秒）。IMDS 自体を使わないと
+分かっている場合は `AWS_EC2_METADATA_DISABLED=true` を設定するとこの待ちを省けます。
+Focal 自身にはプロファイルやリージョンを指定するフラグ・設定はありません。
+必要な IAM 権限は最小権限のサンプルを
+[`docs/iam/focal-ssm-policy.json`](docs/iam/focal-ssm-policy.json) に置いています
+（`ssm:SendCommand` はタグ条件付きの instance ARN と `AWS-RunShellScript` document の2ステートメント、
+`ssm:GetCommandInvocation` / `ssm:CancelCommand` は `Resource: "*"`）。
+
+CLI:
+
+```sh
+focal --transport ssm i-0123456789abcdef0 system
+```
+
+HOST は EC2 インスタンス ID（`i-` プレフィックス、`user@` 相当の指定は不可）を書きます。
+`--identity` / `--port` / `--user` は SSM に対応する概念がなく、`--transport ssm` と同時に
+指定するとエラーになります。
+
+MCP:
+
+```json
+// inspect_system
+{"host": "i-0123456789abcdef0", "transport": "ssm"}
+```
+
+`identity` / `user` は `transport: "ssm"` と同時に指定するとエラーになります。
+
+**AWS-RunShellScript は常に root でコマンドを実行します。**`sudo` 設定で `always` を選んだ
+operation だけ `sudo -n` を前置し（SSH と同じ最初の判断）、`auto` の「非零終了コードでの1回だけの
+再試行」は行いません（root で動くため意味を持たないからです）。
+
+出力には AWS 側の固定上限があります（stdout 24000文字 / stderr 8000文字）。これを超えた出力や
+`execution.max_output` を超えた出力は、SSH transport と同じく `truncated: true` として報告されます
+（S3 への完全な出力保存は ROADMAP 参照）。
+
 ## MCP（`focal serve`）
 
 `focal serve` は CLI と同じ operation を、stateless Streamable HTTP（MCP spec `2026-07-28`）の
@@ -280,6 +342,10 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
   Agent が渡せる値は value object（`ServiceName` / `Duration` / `LineLimit` / `PID` / `ProcessName` /
   `Target` 等）の検証を経てから、決められたトークンの位置にのみ挿入されます（`internal/ssh` の
   argv 組み立て、[ADR 0002](docs/adr/0002-command-construction-boundary.md)）。
+- `transport`（`ssh` | `ssm`）は Agent が呼び出しごとに選べますが、実行できる operation の集合を
+  一切広げません。SSM transport が組み立てる1行のシェル文字列も、SSH と同じ value object 検証済みの
+  `ssh.Command` だけから構成され、設定ファイルで明示的に有効化しない限り呼び出せません
+  （[ADR 0007](docs/adr/0007-ssm-transport.md)）。
 
 ## ADR
 
@@ -290,6 +356,7 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - [0003. YAML ライブラリに goccy/go-yaml を採用する](docs/adr/0003-yaml-library-selection.md)
 - [0004. Remote MCP でも `.ssh/config` の解釈を OpenSSH に完全委任する](docs/adr/0004-delegate-ssh-config-in-remote-mcp.md)
 - [0005. MCP SDK に modelcontextprotocol/go-sdk を採用し stateless Streamable HTTP で提供する](docs/adr/0005-mcp-sdk-and-stateless-transport.md)
+- [0007. AWS SSM Run Command を第二の transport として追加する](docs/adr/0007-ssm-transport.md)
 
 ## ROADMAP（v0.1 スコープ外）
 
@@ -298,6 +365,11 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - **OS 差分吸収** — systemd 以外（OpenRC 等）や Docker のような別のサービスマネージャへの対応
 - **network operation の分割** — `ports` / `routes` / `dns` のような、より粒度の細かい operation への分割
 - **中央 broker 構成** — 複数の `focal serve` をまとめて管理する構成
+- **SSM transport の S3 出力対応** — AWS 側の固定上限（stdout 24000 / stderr 8000 文字）を超える
+  完全な出力を S3 経由で取得できるようにする
+- **SSM の SDK config を serve プロセスで共有** — 現状 `ssm.New`（`config.LoadDefaultConfig` と
+  IMDS リージョン解決を含む）は CLI の1回の実行、または `focal serve` の tool call ごとに
+  毎回呼ばれる。`focal serve` プロセス起動時に一度だけ解決して使い回すようにする
 
 ## Development
 

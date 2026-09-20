@@ -44,6 +44,10 @@ CLI (`internal/cli`) と MCP (`internal/mcp`) は同じ経路を通る。分岐�
    `Command` はフィールド非公開・`newCommand` が唯一のコンストラクタで、`policy.Policy` を受け取る
    ため権限昇格モードは構築時に焼き込まれる。
 5. `ssh.Executor.Execute` — 実行の唯一の場所。権限昇格の再判断はしない（`Command.Sudo()` だけを見る）。
+   `vo.Transport`（`--transport` / tool call の `transport`、既定 `ssh`）で `ssh.OpenSSH` と
+   `internal/ssm.Executor`（AWS SSM Run Command、`execution.transports` で明示的に有効化しない限り拒否）
+   のどちらの `ssh.Executor` 実装を使うかが決まるだけで、`Command` の生成経路・内容には一切影響しない
+   （[ADR 0007](docs/adr/0007-ssm-transport.md)）。
 
 argv の token は provenance で区別される（`lit` = Focal が書いた文字列リテラル、`val` = 呼び出し元の値、
 `prefixed` = その連結）。`val` は先頭ハイフン・シェルメタ文字を拒否するので、呼び出し元の値がオプションに

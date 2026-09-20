@@ -1,0 +1,73 @@
+# The complete shell line this package hands to AWS-RunShellScript, one case
+# per block. Each token of every Command was already validated by
+# internal/ssh (argSpec/literalSpec/programSpec); the single quotes here are
+# this package's own layer, not a substitute for that validation.
+#
+# Shape: [sudo -n] program args...  -- every token individually single-quoted
+# and space-joined.
+
+# plain
+'uptime'
+
+# sudo prefix
+'sudo' '-n' 'uptime'
+
+# UptimeCommand
+'uptime'
+
+# UnameCommand
+'uname' '-a'
+
+# HostnameCommand
+'hostname'
+
+# DateCommand
+'date' '--iso-8601=seconds'
+
+# OSReleaseCommand
+'cat' '/etc/os-release'
+
+# LSCPUCommand
+'lscpu'
+
+# LoadAvgCommand
+'cat' '/proc/loadavg'
+
+# FreeCommand
+'free' '-b'
+
+# MemInfoCommand
+'cat' '/proc/meminfo'
+
+# DFCommand
+'df' '-PT'
+
+# LSBLKCommand
+'lsblk' '-o' 'NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS'
+
+# FindMntCommand
+'findmnt'
+
+# IPAddrCommand
+'ip' '-details' 'addr' 'show'
+
+# IPRouteCommand
+'ip' 'route' 'show'
+
+# SocketStatsCommand
+'ss' '-lntup'
+
+# ResolvConfCommand
+'cat' '/etc/resolv.conf'
+
+# ProcessListCommand
+'ps' '-eo' 'pid,ppid,user,state,%cpu,%mem,etime,comm,args'
+
+# ServiceStatusCommand
+'systemctl' 'show' 'nginx.service' '--no-pager' '--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result'
+
+# LogsCommand
+'journalctl' '-u' 'nginx.service' '--since=-30m' '-n' '200' '--no-pager' '--output=short-iso'
+
+# KernelLogsCommand
+'journalctl' '-k' '--since=-1h' '-n' '200' '--no-pager' '--output=short-iso'

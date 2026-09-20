@@ -94,6 +94,12 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 	if got := cfg.IdentityFile(); got != "" {
 		t.Errorf("IdentityFile() = %q, want empty", got)
 	}
+	if !cfg.TransportEnabled(vo.TransportSSH) {
+		t.Error("TransportEnabled(ssh) = false, want true (the default)")
+	}
+	if cfg.TransportEnabled(vo.TransportSSM) {
+		t.Error("TransportEnabled(ssm) = true, want false: an administrator must opt in")
+	}
 
 	readOnly := []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "logs", "inspect"}
 	for _, name := range readOnly {
@@ -524,6 +530,97 @@ func TestExecutionValueRanges(t *testing.T) {
 				t.Errorf("Field = %q, want %q", err.Field, tt.field)
 			}
 		})
+	}
+}
+
+// TestExecutionTransports covers execution.transports: which sets are
+// accepted, which are refused, and that TransportEnabled reports exactly the
+// set the file named.
+func TestExecutionTransports(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		code  string
+		field string
+		want  []vo.Transport // checked only when code == ""
+	}{
+		{
+			name: "absent keeps the ssh-only default",
+			body: "",
+			want: []vo.Transport{vo.TransportSSH},
+		},
+		{
+			name: "ssh alone, written explicitly",
+			body: "execution:\n  transports: [ssh]\n",
+			want: []vo.Transport{vo.TransportSSH},
+		},
+		{
+			name: "ssh and ssm both opted in",
+			body: "execution:\n  transports: [ssh, ssm]\n",
+			want: []vo.Transport{vo.TransportSSH, vo.TransportSSM},
+		},
+		{
+			name: "ssm alone, without ssh",
+			body: "execution:\n  transports: [ssm]\n",
+			want: []vo.Transport{vo.TransportSSM},
+		},
+		{
+			name:  "empty list is rejected rather than disabling every transport",
+			body:  "execution:\n  transports: []\n",
+			code:  "empty_transports",
+			field: "execution.transports",
+		},
+		{
+			name:  "unknown value is rejected",
+			body:  "execution:\n  transports: [ssh, telnet]\n",
+			code:  "invalid_transport",
+			field: "execution.transports",
+		},
+		{
+			name:  "duplicate value is rejected",
+			body:  "execution:\n  transports: [ssh, ssh]\n",
+			code:  "duplicate_transport",
+			field: "execution.transports",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withConfig(t, tt.body)
+			cfg, err := Load()
+			if tt.code == "" {
+				if err != nil {
+					t.Fatalf("Load() returned error: %v", err)
+				}
+				for _, transport := range []vo.Transport{vo.TransportSSH, vo.TransportSSM} {
+					want := slices.Contains(tt.want, transport)
+					if got := cfg.TransportEnabled(transport); got != want {
+						t.Errorf("TransportEnabled(%s) = %t, want %t", transport, got, want)
+					}
+				}
+				return
+			}
+			wantError(t, err, result.KindValidation, tt.code)
+			if err.Field != tt.field {
+				t.Errorf("Field = %q, want %q", err.Field, tt.field)
+			}
+		})
+	}
+}
+
+func TestLoadTransportsValidTestdata(t *testing.T) {
+	withConfig(t, readTestdata(t, "transports_valid.yaml"))
+	cfg := mustLoad(t)
+	if !cfg.TransportEnabled(vo.TransportSSH) || !cfg.TransportEnabled(vo.TransportSSM) {
+		t.Errorf("transports_valid.yaml should enable both ssh and ssm")
+	}
+}
+
+func TestLoadTransportsInvalidTestdata(t *testing.T) {
+	withConfig(t, readTestdata(t, "transports_invalid.yaml"))
+	_, err := Load()
+	wantError(t, err, result.KindValidation, "invalid_transport")
+	if err.Field != "execution.transports" {
+		t.Errorf("Field = %q, want execution.transports", err.Field)
 	}
 }
 

@@ -26,6 +26,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,7 +49,7 @@ import (
 // see. An operation that ran and reported a non-zero exit is not an error: it
 // is an Envelope with a failed status.
 type Runner interface {
-	Run(ctx context.Context, op operation.Operation, target vo.Target, identity string) (result.Envelope, *result.Error)
+	Run(ctx context.Context, op operation.Operation, target vo.Target, identity string, transport vo.Transport) (result.Envelope, *result.Error)
 }
 
 // Options are the server-wide defaults a focal serve invocation was started
@@ -120,7 +121,31 @@ type server struct {
 // arguments that do not fit the tool's declared schema, a malformed message.
 func (s *server) call(ctx context.Context, name string, args toolArgs) (*sdk.CallToolResult, any, error) {
 	dest := args.destination()
-	target, err := resolveTarget(dest.Host, dest.User, s.opts.DefaultUser)
+
+	transport, err := resolveCallTransport(dest)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	if !s.cfg.TransportEnabled(transport) {
+		return toolError(result.PolicyError(
+			"transport_not_enabled",
+			fmt.Sprintf("transport %q is not enabled for this installation", transport),
+			"execution.transports",
+			[]string{"enable it in the configuration file"},
+		)), nil, nil
+	}
+
+	// The server-wide default user is an ssh(1) concept: applying it to an
+	// ssm call would silently turn a plain instance ID into "user@i-...",
+	// which this package's own dest.User check just refused when the call
+	// named a user explicitly. Composing it here as instead of there would
+	// let the same refusal be bypassed through the server's own default
+	// rather than through the call, so it is suppressed the same way.
+	defaultUser := s.opts.DefaultUser
+	if transport == vo.TransportSSM {
+		defaultUser = ""
+	}
+	target, err := resolveTarget(dest.Host, dest.User, defaultUser)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
@@ -136,7 +161,7 @@ func (s *server) call(ctx context.Context, name string, args toolArgs) (*sdk.Cal
 		return toolError(err), nil, nil
 	}
 
-	env, err := s.runner.Run(ctx, op, target, dest.Identity)
+	env, err := s.runner.Run(ctx, op, target, dest.Identity, transport)
 	if err != nil {
 		return toolError(err), nil, nil
 	}

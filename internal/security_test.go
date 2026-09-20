@@ -14,8 +14,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/youyo/focal/internal/policy"
@@ -235,5 +237,122 @@ func TestFactoryArgvCarriesNoDangerousBytes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ssmNonTestGoFiles lists internal/ssm's own source files, excluding tests,
+// the same way exportedCommandFactories reads ssh/commands.go directly rather
+// than through go/types: this file's whole purpose is to rediscover a
+// property from outside the package it is about, independently of anything
+// internal/ssm/boundary_test.go asserts about itself.
+func ssmNonTestGoFiles(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir("ssm")
+	if err != nil {
+		t.Fatalf("read internal/ssm: %v", err)
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, "ssm/"+name)
+	}
+	if len(files) == 0 {
+		t.Fatal("found no non-test .go file in internal/ssm; the walk is broken")
+	}
+	return files
+}
+
+// TestSSMExportedFunctionsTakeNoRawString is internal/ssm's counterpart to
+// TestOnlyAllowedExportedFunctionsReturnCommand in internal/ssh/boundary_test.go:
+// that test keeps internal/ssh's Command from being constructible outside a
+// reviewed factory, and this one keeps internal/ssm from having a second,
+// looser entry point that accepted a bare string and built a shell line from
+// it instead of from an already-validated ssh.Command. Run from outside the
+// package with its own go/ast walk, so a change made only inside internal/ssm
+// cannot silence it.
+func TestSSMExportedFunctionsTakeNoRawString(t *testing.T) {
+	fset := token.NewFileSet()
+	checked := 0
+	for _, path := range ssmNonTestGoFiles(t) {
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() || fn.Type.Params == nil {
+				continue
+			}
+			checked++
+			for _, param := range fn.Type.Params.List {
+				if ident, ok := param.Type.(*ast.Ident); ok && ident.Name == "string" {
+					t.Errorf("%s.%s takes a bare string parameter; every command internal/ssm runs must arrive as an ssh.Command",
+						path, fn.Name.Name)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no exported function in internal/ssm to check; the walk is broken")
+	}
+}
+
+// TestSSMSendCommandBuildsCommandsFromCommandLineOnly reads internal/ssm's own
+// executor.go and asserts that the "commands" element of the SendCommand
+// request is built from exactly one call to commandLine — the single
+// unexported function that turns a validated ssh.Command into the shell line
+// AWS-RunShellScript runs — rather than from any string literal or
+// concatenation a later change could add beside it.
+func TestSSMSendCommandBuildsCommandsFromCommandLineOnly(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "ssm/executor.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse ssm/executor.go: %v", err)
+	}
+
+	found := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Parameters" {
+			return true
+		}
+		mapLit, ok := kv.Value.(*ast.CompositeLit)
+		if !ok {
+			t.Fatalf("SendCommandInput.Parameters is not a composite literal: %T", kv.Value)
+		}
+		for _, elt := range mapLit.Elts {
+			pair, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			lit, ok := pair.Key.(*ast.BasicLit)
+			if !ok || lit.Value != `"commands"` {
+				continue
+			}
+			found++
+			sliceLit, ok := pair.Value.(*ast.CompositeLit)
+			if !ok || len(sliceLit.Elts) != 1 {
+				t.Fatalf(`Parameters["commands"] is not a one-element slice literal: %#v`, pair.Value)
+			}
+			call, ok := sliceLit.Elts[0].(*ast.CallExpr)
+			if !ok {
+				t.Fatalf(`Parameters["commands"][0] is not a function call: %#v`, sliceLit.Elts[0])
+			}
+			fnIdent, ok := call.Fun.(*ast.Ident)
+			if !ok || fnIdent.Name != "commandLine" {
+				t.Errorf(`Parameters["commands"][0] calls %v, want a call to commandLine`, call.Fun)
+			}
+		}
+		return true
+	})
+	if found == 0 {
+		t.Fatal(`found no SendCommandInput.Parameters["commands"] in ssm/executor.go; the walk is broken`)
 	}
 }

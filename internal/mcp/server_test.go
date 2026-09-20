@@ -38,10 +38,11 @@ type runnerCall struct {
 	operation string
 	target    vo.Target
 	identity  string
+	transport vo.Transport
 }
 
-func (r *recordingRunner) Run(_ context.Context, op operation.Operation, t vo.Target, identity string) (result.Envelope, *result.Error) {
-	r.calls = append(r.calls, runnerCall{operation: op.Name(), target: t, identity: identity})
+func (r *recordingRunner) Run(_ context.Context, op operation.Operation, t vo.Target, identity string, transport vo.Transport) (result.Envelope, *result.Error) {
+	r.calls = append(r.calls, runnerCall{operation: op.Name(), target: t, identity: identity, transport: transport})
 	if r.err != nil {
 		return result.Envelope{}, r.err
 	}
@@ -348,6 +349,83 @@ func TestUserAndIdentityReachTheRunner(t *testing.T) {
 	}
 }
 
+// TestTransportDefaultsToSSH pins that a call naming no transport property
+// still reaches the runner as ssh, so every existing integration keeps
+// meaning what it always has.
+func TestTransportDefaultsToSSH(t *testing.T) {
+	url, runner := serverFor(t, "", Options{})
+
+	callTool(t, url, "inspect_system", map[string]any{"host": "web"})
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner saw %d calls, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].transport; got != vo.TransportSSH {
+		t.Errorf("transport = %s, want ssh", got)
+	}
+}
+
+// TestTransportSSMRefusedWhenNotEnabled is the config opt-in gate: ssh alone
+// is enabled by default, so a call asking for ssm is refused before it
+// reaches the runner.
+func TestTransportSSMRefusedWhenNotEnabled(t *testing.T) {
+	url, runner := serverFor(t, "", Options{})
+
+	res := callTool(t, url, "inspect_system", map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm"})
+	got := toolErrorOf(t, res)
+	if got.Code != "transport_not_enabled" {
+		t.Errorf("code = %q, want transport_not_enabled", got.Code)
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("a refused transport still reached the runner: %+v", runner.calls)
+	}
+}
+
+// TestTransportSSMReachesRunnerWhenEnabled is the other half of the gate:
+// once execution.transports names ssm, a call naming it reaches the runner
+// carrying that transport, so the caller (internal/cli's serveRunner) is the
+// one that picks the ssm executor factory.
+func TestTransportSSMReachesRunnerWhenEnabled(t *testing.T) {
+	url, runner := serverFor(t, "execution:\n  transports: [ssh, ssm]\n", Options{})
+
+	callTool(t, url, "inspect_system", map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm"})
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner saw %d calls, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].transport; got != vo.TransportSSM {
+		t.Errorf("transport = %s, want ssm", got)
+	}
+	if got := runner.calls[0].target.String(); got != "i-0123456789abcdef0" {
+		t.Errorf("target = %q, want the instance ID unchanged", got)
+	}
+}
+
+// TestTransportSSMRejectsIdentityAndUser covers identity and user: neither
+// means anything to AWS SSM Run Command, so each is refused before the
+// runner is reached rather than silently ignored.
+func TestTransportSSMRejectsIdentityAndUser(t *testing.T) {
+	url, runner := serverFor(t, "execution:\n  transports: [ssh, ssm]\n", Options{})
+
+	tests := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "identity", args: map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm", "identity": "customer-a"}},
+		{name: "user", args: map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm", "user": "ec2-user"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := callTool(t, url, "inspect_system", tt.args)
+			got := toolErrorOf(t, res)
+			if got.Code != "field_not_supported_by_transport" {
+				t.Errorf("code = %q, want field_not_supported_by_transport", got.Code)
+			}
+		})
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("a rejected combination still reached the runner: %+v", runner.calls)
+	}
+}
+
 func TestDefaultUserAppliesWhenTheCallNamesNone(t *testing.T) {
 	url, runner := serverFor(t, "", Options{DefaultUser: "ec2-user"})
 
@@ -361,6 +439,31 @@ func TestDefaultUserAppliesWhenTheCallNamesNone(t *testing.T) {
 	callTool(t, url, "inspect_system", map[string]any{"host": "root@web"})
 	if got := runner.calls[1].target.String(); got != "root@web" {
 		t.Errorf("target = %q, want the host's own user kept", got)
+	}
+}
+
+// TestDefaultUserIsNotAppliedToSSMTargets pins the fix for the bug the server
+// default user would otherwise cause: composing "ec2-user@i-..." for a call
+// naming no user of its own, which internal/ssm's own second-layer target
+// check would then refuse as an instance ID it does not recognise. The
+// server default is an ssh(1) concept and must not silently reach an ssm
+// call at all.
+func TestDefaultUserIsNotAppliedToSSMTargets(t *testing.T) {
+	url, runner := serverFor(t, "execution:\n  transports: [ssh, ssm]\n", Options{DefaultUser: "ec2-user"})
+
+	callTool(t, url, "inspect_system", map[string]any{"host": "i-0123456789abcdef0", "transport": "ssm"})
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner saw %d calls, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].target.String(); got != "i-0123456789abcdef0" {
+		t.Errorf("target = %q, want the instance ID with no server default user composed in", got)
+	}
+
+	// The same server default still applies to an ssh call, so the fix is
+	// scoped to ssm and does not disable the feature entirely.
+	callTool(t, url, "inspect_system", map[string]any{"host": "web"})
+	if got := runner.calls[1].target.String(); got != "ec2-user@web" {
+		t.Errorf("target = %q, want the server default still applied to ssh", got)
 	}
 }
 
