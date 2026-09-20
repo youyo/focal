@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,15 @@ const (
 const (
 	minTimeoutSeconds = 30
 	maxTimeoutSeconds = 2592000
+
+	// minExecutionTimeoutSeconds and maxExecutionTimeoutSeconds bound the
+	// AWS-RunShellScript document's own "executionTimeout" parameter: how
+	// long the command may run on the instance once delivered. This is a
+	// separate range from TimeoutSeconds' 30..2592000 above, which bounds
+	// only how long SendCommand keeps trying to deliver the command in the
+	// first place — the two are not interchangeable.
+	minExecutionTimeoutSeconds = 1
+	maxExecutionTimeoutSeconds = 172800
 
 	// defaultPollInterval is how long Execute waits between GetCommandInvocation
 	// calls. It is a field on Executor, not a constant baked into poll, so a
@@ -165,9 +175,12 @@ func (e *Executor) Execute(ctx context.Context, target vo.Target, cmd ssh.Comman
 // run performs exactly one SendCommand and polls it to completion.
 func (e *Executor) run(ctx context.Context, instanceID string, cmd ssh.Command, sudo bool) (ssh.Output, *result.Error) {
 	send, err := e.api.SendCommand(ctx, &ssm.SendCommandInput{
-		DocumentName:   aws.String(documentName),
-		InstanceIds:    []string{instanceID},
-		Parameters:     map[string][]string{"commands": {commandLine(cmd, sudo)}},
+		DocumentName: aws.String(documentName),
+		InstanceIds:  []string{instanceID},
+		Parameters: map[string][]string{
+			"commands":         {commandLine(cmd, sudo)},
+			"executionTimeout": {strconv.Itoa(int(clampExecutionTimeoutSeconds(e.opts.Timeout)))},
+		},
 		TimeoutSeconds: aws.Int32(clampTimeoutSeconds(e.opts.Timeout)),
 	})
 	if err != nil {
@@ -202,6 +215,21 @@ func (e *Executor) poll(ctx context.Context, commandID, instanceID string) (ssh.
 				}
 				continue
 			}
+			// GetCommandInvocation can fail this way when ctx's own
+			// deadline or cancellation is what actually ended the call —
+			// the AWS SDK reports that as a generic request error, not as
+			// context.DeadlineExceeded, so it has to be checked for
+			// explicitly rather than left to errors.Is on err itself.
+			// SendCommand already succeeded by this point, so the same
+			// best-effort cancel every other ctx-ending exit makes applies
+			// here too, and the error focal reports should say "timed out"
+			// or "canceled" — checkable through ssh.TimedOut — rather than
+			// the SDK's own wording for a call that failed only because
+			// its context ended.
+			if ctxErr := e.ctxError(ctx); ctxErr != nil {
+				e.cancelBestEffort(commandID, instanceID)
+				return ssh.Output{}, ctxErr
+			}
 			return ssh.Output{}, mapAPIError(err)
 		}
 
@@ -224,8 +252,12 @@ func (e *Executor) poll(ctx context.Context, commandID, instanceID string) (ssh.
 // an Output for a terminal success/failure, done=false to keep polling, or a
 // non-nil error for every other terminal status.
 func (e *Executor) evaluate(inv *ssm.GetCommandInvocationOutput) (ssh.Output, bool, *result.Error) {
+	// The exact text of each value below is AWS's own wording for
+	// StatusDetails, spaces included where AWS puts them ("Delivery Timed
+	// Out", "Execution Timed Out") and not where it doesn't ("Undeliverable",
+	// "Terminated"). See GetCommandInvocation's StatusDetails documentation.
 	switch aws.ToString(inv.StatusDetails) {
-	case "DeliveryTimedOut":
+	case "Delivery Timed Out":
 		return ssh.Output{}, false, result.ExecutionError("ssm_delivery_timed_out",
 			"ssm could not deliver the command to the instance in time")
 	case "Undeliverable":
@@ -234,20 +266,27 @@ func (e *Executor) evaluate(inv *ssm.GetCommandInvocationOutput) (ssh.Output, bo
 	case "Terminated":
 		return ssh.Output{}, false, result.ExecutionError("ssm_terminated",
 			"ssm invocation was terminated before it completed")
-	case "ExecutionTimedOut":
+	case "Execution Timed Out":
 		return ssh.Output{}, false, result.ExecutionError(codeTimeout,
 			fmt.Sprintf("ssm command did not finish within %s", e.opts.Timeout))
 	}
 
 	switch inv.Status {
-	case types.CommandInvocationStatusPending, types.CommandInvocationStatusInProgress, types.CommandInvocationStatusDelayed:
+	// Cancelling is not a terminal status: it is the window between a
+	// CancelCommand request and the invocation actually stopping, and the
+	// invocation may still finish (Success/Failed) before the cancel takes
+	// effect. Treating it as terminal here would report a command as
+	// cancelled when it might go on to complete normally, so it is polled
+	// the same way Pending/InProgress/Delayed are.
+	case types.CommandInvocationStatusPending, types.CommandInvocationStatusInProgress,
+		types.CommandInvocationStatusDelayed, types.CommandInvocationStatusCancelling:
 		return ssh.Output{}, false, nil
 	case types.CommandInvocationStatusSuccess, types.CommandInvocationStatusFailed:
 		return e.finish(inv), true, nil
 	case types.CommandInvocationStatusTimedOut:
 		return ssh.Output{}, false, result.ExecutionError(codeTimeout,
 			fmt.Sprintf("ssm command did not finish within %s", e.opts.Timeout))
-	case types.CommandInvocationStatusCancelled, types.CommandInvocationStatusCancelling:
+	case types.CommandInvocationStatusCancelled:
 		return ssh.Output{}, false, result.ExecutionError("ssm_cancelled", "ssm command was cancelled")
 	default:
 		return ssh.Output{}, false, result.ExecutionError("ssm_unexpected_status",
@@ -314,11 +353,25 @@ func (e *Executor) wait(ctx context.Context) *result.Error {
 	case <-timer.C:
 		return nil
 	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return result.ExecutionError(codeTimeout, fmt.Sprintf("ssm command did not finish within %s", e.opts.Timeout))
-		}
-		return result.ExecutionError("canceled", "ssm command was canceled before it finished")
+		return e.ctxError(ctx)
 	}
+}
+
+// ctxError reports why ctx ended, in the same terms wait already used: a
+// deadline is reported as codeTimeout, so ssh.TimedOut(err) can recognize it
+// regardless of which of this package's several ctx-ending paths produced
+// it; anything else — an explicit cancel — is reported as "canceled". It
+// returns nil when ctx has not ended, so a caller elsewhere in this file
+// that suspects ctx (rather than the SDK call itself) explains a failure can
+// check that suspicion without duplicating this classification.
+func (e *Executor) ctxError(ctx context.Context) *result.Error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return result.ExecutionError(codeTimeout, fmt.Sprintf("ssm command did not finish within %s", e.opts.Timeout))
+	}
+	return result.ExecutionError("canceled", "ssm command was canceled before it finished")
 }
 
 // cancelBestEffort asks SSM to stop an invocation Execute is about to report
@@ -326,7 +379,12 @@ func (e *Executor) wait(ctx context.Context) *result.Error {
 // failed cancel does not change the error Execute already decided to return,
 // and this package must not block returning that error on a second API call.
 func (e *Executor) cancelBestEffort(commandID, instanceID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 2 seconds, the same meaning ssh.OpenSSH's waitDelay carries: how long
+	// this best-effort cleanup call may hold the caller who is already
+	// giving up on the command, not a budget for the cancel to actually
+	// succeed. A slow or wedged CancelCommand should not turn a fast
+	// timeout/cancel into a slow one.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, _ = e.api.CancelCommand(ctx, &ssm.CancelCommandInput{
 		CommandId:   aws.String(commandID),
@@ -335,7 +393,8 @@ func (e *Executor) cancelBestEffort(commandID, instanceID string) {
 }
 
 // clampTimeoutSeconds bounds Options.Timeout to the range SendCommand's own
-// TimeoutSeconds parameter accepts.
+// TimeoutSeconds parameter accepts: how long SendCommand keeps trying to
+// deliver the command to the instance before giving up.
 func clampTimeoutSeconds(d time.Duration) int32 {
 	s := int64(d.Seconds())
 	switch {
@@ -343,6 +402,24 @@ func clampTimeoutSeconds(d time.Duration) int32 {
 		return minTimeoutSeconds
 	case s > maxTimeoutSeconds:
 		return maxTimeoutSeconds
+	default:
+		return int32(s)
+	}
+}
+
+// clampExecutionTimeoutSeconds bounds Options.Timeout to the range
+// AWS-RunShellScript's own "executionTimeout" parameter accepts: how long the
+// command may run on the instance once delivered. TimeoutSeconds alone does
+// not bound this — it is a delivery deadline, not an execution deadline — so
+// without this parameter a command could keep running past Options.Timeout
+// even though Execute's own context deadline had already given up on it.
+func clampExecutionTimeoutSeconds(d time.Duration) int32 {
+	s := int64(d.Seconds())
+	switch {
+	case s < minExecutionTimeoutSeconds:
+		return minExecutionTimeoutSeconds
+	case s > maxExecutionTimeoutSeconds:
+		return maxExecutionTimeoutSeconds
 	default:
 		return int32(s)
 	}

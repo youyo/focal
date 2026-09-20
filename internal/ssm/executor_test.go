@@ -112,6 +112,30 @@ func mustCmd(t *testing.T) ssh.Command {
 	return cmd
 }
 
+// TestSendCommandSetsExecutionTimeout pins that Options.Timeout bounds how
+// long the command may run on the instance, not only how long SendCommand
+// tries to deliver it: TimeoutSeconds alone leaves execution unbounded, so
+// the "executionTimeout" document parameter has to be set too.
+func TestSendCommandSetsExecutionTimeout(t *testing.T) {
+	fake := &fakeAPI{invocations: map[string][]invocationStep{
+		"cmd-1": {successInvocation("ok\n", "", 0)},
+	}}
+	e := newTestExecutor(t, fake) // Timeout: time.Second
+	if _, err := e.Execute(context.Background(), testTarget(t), mustCmd(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(fake.sendCalls) != 1 {
+		t.Fatalf("SendCommand called %d times, want 1", len(fake.sendCalls))
+	}
+	got := fake.sendCalls[0].Parameters["executionTimeout"]
+	// newTestExecutor's Timeout (1s) is below minExecutionTimeoutSeconds'
+	// floor of 1s only at the boundary; the clamp still applies the same way
+	// it does to TimeoutSeconds, so the parameter is exactly "1".
+	if len(got) != 1 || got[0] != "1" {
+		t.Errorf(`Parameters["executionTimeout"] = %v, want ["1"]`, got)
+	}
+}
+
 func TestExecuteSuccess(t *testing.T) {
 	fake := &fakeAPI{invocations: map[string][]invocationStep{
 		"cmd-1": {successInvocation("up 3 days\n", "", 0)},
@@ -229,7 +253,7 @@ func TestExecuteDeliveryTimedOut(t *testing.T) {
 	fake := &fakeAPI{invocations: map[string][]invocationStep{
 		"cmd-1": {{out: &ssm.GetCommandInvocationOutput{
 			Status:        types.CommandInvocationStatusFailed,
-			StatusDetails: aws.String("DeliveryTimedOut"),
+			StatusDetails: aws.String("Delivery Timed Out"),
 		}}},
 	}}
 	e := newTestExecutor(t, fake)
@@ -321,6 +345,53 @@ func TestExecuteAWSAPIError(t *testing.T) {
 	var re *result.Error
 	if !errors.As(err, &re) || re.Code != "ssm_api_error" {
 		t.Fatalf("err = %v, want code ssm_api_error", err)
+	}
+}
+
+// TestExecuteClassifiesGetCommandInvocationErrorAsTimeoutWhenCtxEnded covers
+// the case where GetCommandInvocation itself fails (not with
+// InvocationDoesNotExist) at the exact moment ctx's deadline or cancellation
+// is what actually caused it: the AWS SDK reports that as an ordinary
+// request error, not as context.DeadlineExceeded, so poll has to notice
+// ctx.Err() directly. The error focal returns must still be classifiable as
+// a timeout by ssh.TimedOut, and SendCommand having already succeeded means
+// a best-effort CancelCommand is owed.
+func TestExecuteClassifiesGetCommandInvocationErrorAsTimeoutWhenCtxEnded(t *testing.T) {
+	fake := &fakeAPI{invocations: map[string][]invocationStep{
+		"cmd-1": {{err: errors.New("rpc error: context deadline exceeded")}},
+	}}
+	e := newTestExecutor(t, fake)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	<-ctx.Done() // ensure ctx has already ended before poll ever calls the API
+
+	_, err := e.Execute(ctx, testTarget(t), mustCmd(t))
+	if !ssh.TimedOut(err) {
+		t.Fatalf("ssh.TimedOut(err) = false, want true; err = %v", err)
+	}
+	if len(fake.cancelCalls) == 0 {
+		t.Error("CancelCommand was not called after GetCommandInvocation failed with ctx already ended")
+	}
+}
+
+// TestExecuteCancellingIsNotTerminal covers the status the Systems Manager
+// API returns while a CancelCommand request is in flight but has not yet
+// stopped the invocation: it must not be treated as a terminal cancellation,
+// because the invocation may still reach Success or Failed on its own.
+func TestExecuteCancellingIsNotTerminal(t *testing.T) {
+	fake := &fakeAPI{invocations: map[string][]invocationStep{
+		"cmd-1": {
+			{out: &ssm.GetCommandInvocationOutput{Status: types.CommandInvocationStatusCancelling}},
+			successInvocation("finished anyway\n", "", 0),
+		},
+	}}
+	e := newTestExecutor(t, fake)
+	out, err := e.Execute(context.Background(), testTarget(t), mustCmd(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out.Stdout != "finished anyway\n" {
+		t.Errorf("out = %+v, want the invocation to be polled past Cancelling to its real terminal status", out)
 	}
 }
 
