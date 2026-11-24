@@ -38,7 +38,7 @@ var expectedTools = []string{
 // the real container, one that succeeds and one that must be refused.
 func TestMCPToolsAndCall(t *testing.T) {
 	h := requireHarness(t)
-	url := h.startServe(t, "--upstream-token", upstreamToken)
+	url := h.startServe(t, upstreamToken)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -117,7 +117,7 @@ func TestMCPToolsAndCall(t *testing.T) {
 // it reaches any tool.
 func TestMCPAuth(t *testing.T) {
 	h := requireHarness(t)
-	url := h.startServe(t, "--upstream-token", upstreamToken)
+	url := h.startServe(t, upstreamToken)
 
 	for name, header := range map[string]string{
 		"no token":    "",
@@ -168,10 +168,32 @@ func TestServeRejectsUnauthenticatedNonLoopback(t *testing.T) {
 	}
 }
 
-// startServe launches `focal serve` on a free loopback port with the given
-// extra flags, waits until it reports it is listening, and registers its
-// shutdown. It returns the base URL of the MCP endpoint.
-func (h *harness) startServe(t *testing.T, extraArgs ...string) string {
+// TestServeHasNoUpstreamTokenFlag confirms the real binary refuses the removed
+// flag: the secret has no command-line spelling, so it can never be in the
+// process list.
+func TestServeHasNoUpstreamTokenFlag(t *testing.T) {
+	h := requireHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, stderr, code := h.run(ctx, nil, "serve", "--config", h.configFile, "--upstream-token", upstreamToken)
+
+	if code == 0 {
+		t.Fatalf("serve accepted --upstream-token (exit 0)\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "unknown flag: --upstream-token") {
+		t.Errorf("stderr does not report an unknown flag:\n%s", stderr)
+	}
+	if strings.Contains(stderr, upstreamToken) {
+		t.Errorf("stderr repeats the token:\n%s", stderr)
+	}
+}
+
+// startServe launches `focal serve` on a free loopback port with token in
+// FOCAL_UPSTREAM_TOKEN (none when it is empty) and the given extra flags,
+// waits until it reports it is listening, and registers its shutdown. It
+// returns the base URL of the MCP endpoint.
+func (h *harness) startServe(t *testing.T, token string, extraArgs ...string) string {
 	t.Helper()
 	port := freePort(t)
 	listen := fmt.Sprintf("127.0.0.1:%d", port)
@@ -179,7 +201,10 @@ func (h *harness) startServe(t *testing.T, extraArgs ...string) string {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, h.focalBin, args...)
-	cmd.Env = h.env
+	cmd.Env = append([]string{}, h.env...)
+	if token != "" {
+		cmd.Env = append(cmd.Env, "FOCAL_UPSTREAM_TOKEN="+token)
+	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

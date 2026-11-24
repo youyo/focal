@@ -21,7 +21,7 @@
 // The handler NewHandler returns answers whatever reaches it; deciding what may
 // reach it belongs to internal/cli, which chooses the address or socket focal
 // listens on and wraps this handler in the shared-secret check
-// `focal serve --upstream-token` asks for.
+// FOCAL_UPSTREAM_TOKEN asks for.
 package mcp
 
 import (

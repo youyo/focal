@@ -45,7 +45,8 @@ Focal は接続先への SSH 実行に、利用者の環境にインストール
 ## 設定ファイル
 
 Focal は `$XDG_CONFIG_HOME/focal/config.yaml`（`XDG_CONFIG_HOME` 未設定なら
-`~/.config/focal/config.yaml`）を起動時に一度読みます。ファイルが存在しない場合は、読み取り専用
+`~/.config/focal/config.yaml`）を起動時に一度読みます。`XDG_CONFIG_HOME` が相対パスのときは XDG の仕様どおり無効として
+無視し、未設定と同じ扱いにします。ファイルが存在しない場合は、読み取り専用
 operation がすべて有効・`kernel` だけ無効・sudo はどこにも掛からないという安全側デフォルトで動きます。
 未知のキーや範囲外の値はすべて起動時エラーであり、意図しない弱い設定へ黙って落ちることはありません。
 
@@ -104,6 +105,9 @@ focal -i ~/.ssh/customer-a.pem -p 2222 -l ec2-user web01 kernel --since 1h
 
 接続設定の優先順位は **CLI のフラグ → 設定ファイル → `~/.ssh/config` / ssh(1) の既定値** です。
 
+`-i` / `--identity`（設定ファイルの `identity_file` も同じ）は、ssh-agent や `~/.ssh/config` が持つ他の鍵の提示を止めません。
+指定した鍵だけに限定したい場合は `~/.ssh/config` で `IdentitiesOnly yes` を設定してください。
+
 ## SSM transport
 
 SSH に到達できない環境（鍵配布が難しい、22番ポートを開けたくない、既に AWS Systems Manager で
@@ -160,7 +164,7 @@ MCP:
 
 **AWS-RunShellScript は常に root でコマンドを実行します。**`sudo` 設定で `always` を選んだ
 operation だけ `sudo -n` を前置し（SSH と同じ最初の判断）、`auto` の「非零終了コードでの1回だけの
-再試行」は行いません（root で動くため意味を持たないからです）。
+再試行」は行いません（root で動くため意味を持たないからです）。`sudo` を `never` にした operation も、SSM transport では root で実行されます。
 
 出力には AWS 側の固定上限があります（stdout 24000文字 / stderr 8000文字）。これを超えた出力や
 `execution.max_output` を超えた出力は、SSH transport と同じく `truncated: true` として報告されます
@@ -172,6 +176,12 @@ operation だけ `sudo -n` を前置し（SSH と同じ最初の判断）、`aut
 MCP tool として公開します。**focal 自身はユーザーを認証しません**（誰が呼んでいるかを判定する機構は
 持ちません）。既定で `127.0.0.1` にのみ bind し、それ以外のアドレスへ bind するには
 `--allow-unauthenticated-listen` を明示するか、後述の upstream token を設定する必要があります。
+
+**loopback への bind が防ぐのは別ホストからの到達だけです。** 同じマシン上の任意のユーザー・
+任意のプロセスは `127.0.0.1:8080` に接続でき、運用者の SSH 鍵・AWS 認証情報で検査を実行できます。
+共用ホストでは upstream token（`FOCAL_UPSTREAM_TOKEN`）を設定するか、`--listen unix:/path`
+の Unix ソケット（モード 0600）を使ってください。token なしで TCP の loopback アドレスへ
+bind すると、起動時に stderr へこの旨の警告を出します（token あり・Unix ソケットでは出ません）。
 
 ```sh
 focal serve --listen 127.0.0.1:8080 \
@@ -187,12 +197,12 @@ focal と呼び出し元の間の境界を強化する手段が2つあります�
   ユーザーだけで、別ホストからは原理的に到達できません。**`0600` が防ぐのは別ユーザーからのアクセスだけで、
   同一ユーザーの別プロセスからの接続は防げません。** UDS 経由の bind では
   `--allow-unauthenticated-listen` は不要かつ無関係です（ネットワーク到達性の判定そのものを行わないため）。
-- **固定 shared secret**（`--upstream-token`、または `FOCAL_UPSTREAM_TOKEN`）— 境界をリクエストに載る
+- **固定 shared secret**（環境変数 `FOCAL_UPSTREAM_TOKEN`）— 境界をリクエストに載る
   値で引きます。token が設定されているリクエストにのみ `Authorization: Bearer <token>` を要求し、
   一致しなければ `401`（body は固定文字列、token・設定値・スタック情報は含みません）を返します。token は
-  32 バイト以上の可視 ASCII が必要です。**`--upstream-token` はプロセス一覧から読めるため、
-  `FOCAL_UPSTREAM_TOKEN` を推奨します**（`--upstream-token` を使うと起動時に stderr へその旨の警告が
-  出ます。token 自体は出力されません）。upstream token が設定されている場合、非 loopback bind は
+  32 バイト以上の可視 ASCII が必要です。コマンドライン引数はプロセス一覧から同じマシンの他ユーザーにも
+  読めるため、token を渡すフラグはなく、環境変数だけで受け取ります（読み取った後は focal 自身の環境から
+  取り除かれ、起動する ssh には引き継がれません）。upstream token が設定されている場合、非 loopback bind は
   `--allow-unauthenticated-listen` なしでも許可されますが、通信は暗号化されないため（token も応答も平文で
   流れます）、loopback 以外で bind するなら前段に TLS 終端プロキシを置いてください。
 
@@ -216,6 +226,9 @@ focal と呼び出し元の間の境界を強化する手段が2つあります�
 // inspect_logs
 {"host": "prod-web", "service": "nginx", "since": "30m", "lines": 200}
 ```
+
+ツール結果の stdout / stderr は検査対象ホスト由来のデータ（journal の行・プロセスの引数など）であり、
+第三者が書き込める内容を含みえます。MCP クライアントはそれを指示として扱わないでください。
 
 ### Claude Desktop から接続する（[idproxy](https://github.com/youyo/idproxy) を前段に置く）
 
@@ -316,7 +329,9 @@ Claude Desktop 側の接続手順の骨子:
 
 **`focal serve` は既定で `127.0.0.1` にのみ bind します。** ループバック以外のアドレスへ bind するには
 `--allow-unauthenticated-listen` を明示するか upstream token を設定する必要があり、どちらもなければ
-起動時エラーになります（安全側デフォルト）。idproxy を前段に置く構成では `focal serve` はループバックの
+起動時エラーになります。ただしこれが防ぐのは別ホストからの到達だけで、同じマシンの別ユーザー・
+別プロセスからは到達できます（共用ホストでは token か Unix ソケット（0600）を使い、token なしの
+loopback bind では起動時に警告が出ます）。idproxy を前段に置く構成では `focal serve` はループバックの
 まま（または UDS で）起動し、外部への公開は idproxy 側が担います。
 
 ## セキュリティモデル
