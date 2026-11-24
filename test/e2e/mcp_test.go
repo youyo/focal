@@ -146,25 +146,54 @@ func TestMCPAuth(t *testing.T) {
 	}
 }
 
-// TestServeRejectsUnauthenticatedNonLoopback confirms focal refuses to bind an
-// address reachable from beyond the machine when nothing authenticates the
-// caller — no token, no --allow-unauthenticated-listen. The refusal is at
-// startup, before any socket exists.
-func TestServeRejectsUnauthenticatedNonLoopback(t *testing.T) {
+// TestServeRefusesTCPWithoutAToken confirms focal refuses to bind any TCP
+// address, loopback included, when it has no upstream token to demand. The
+// refusal is at startup, before any socket exists, and names the ways out.
+func TestServeRefusesTCPWithoutAToken(t *testing.T) {
 	h := requireHarness(t)
 
+	for _, listen := range []string{"127.0.0.1:0", "0.0.0.0:0"} {
+		t.Run(listen, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			stdout, stderr, code := h.run(ctx, nil, "serve", "--config", h.configFile, "--listen", listen)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2\nstdout: %s\nstderr: %s", code, stdout, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want nothing", stdout)
+			}
+			e := decodeError(t, stderr)
+			if e.Kind != "validation" {
+				t.Errorf("kind = %q, want validation\n%s", e.Kind, stderr)
+			}
+			if e.Code != "unauthenticated_listen_address" {
+				t.Errorf("code = %q, want unauthenticated_listen_address\n%s", e.Code, stderr)
+			}
+			for _, want := range []string{"FOCAL_UPSTREAM_TOKEN", "--listen unix:", "focal mcp"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the refusal does not offer %s:\n%s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestServeHasNoAllowUnauthenticatedListenFlag confirms the real binary refuses
+// the removed flag as a usage error: there is no spelling left for a TCP
+// listener without a token.
+func TestServeHasNoAllowUnauthenticatedListenFlag(t *testing.T) {
+	h := requireHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	stdout, stderr, code := h.run(ctx, nil, "serve", "--listen", "0.0.0.0:0")
-	if code == 0 {
-		t.Fatalf("serve unexpectedly started\nstdout: %s\nstderr: %s", stdout, stderr)
+
+	_, stderr, code := h.run(ctx, nil, "serve", "--config", h.configFile, "--allow-unauthenticated-listen")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\n%s", code, stderr)
 	}
-	e := decodeError(t, stderr)
-	if e.Kind != "validation" {
-		t.Errorf("kind = %q, want validation\n%s", e.Kind, stderr)
-	}
-	if e.Code != "unauthenticated_listen_address" {
-		t.Errorf("code = %q, want unauthenticated_listen_address\n%s", e.Code, stderr)
+	if !strings.Contains(stderr, "unknown flag: --allow-unauthenticated-listen") {
+		t.Errorf("stderr does not report an unknown flag:\n%s", stderr)
 	}
 }
 
@@ -189,14 +218,21 @@ func TestServeHasNoUpstreamTokenFlag(t *testing.T) {
 	}
 }
 
-// startServe launches `focal serve` on a free loopback port with token in
-// FOCAL_UPSTREAM_TOKEN (none when it is empty) and the given extra flags,
-// waits until it reports it is listening, and registers its shutdown. It
-// returns the base URL of the MCP endpoint.
+// startServe launches `focal serve` on a free loopback port through
+// startServeOn and returns the base URL of the MCP endpoint.
 func (h *harness) startServe(t *testing.T, token string, extraArgs ...string) string {
 	t.Helper()
-	port := freePort(t)
-	listen := fmt.Sprintf("127.0.0.1:%d", port)
+	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	h.startServeOn(t, listen, token, extraArgs...)
+	return "http://" + listen + "/"
+}
+
+// startServeOn launches `focal serve --listen listen` with token in
+// FOCAL_UPSTREAM_TOKEN (none when it is empty) and the given extra flags,
+// waits until it reports it is listening, and registers its shutdown. listen
+// is passed through as written, so it may be host:port or unix:/path.
+func (h *harness) startServeOn(t *testing.T, listen, token string, extraArgs ...string) {
+	t.Helper()
 	args := append([]string{"serve", "--config", h.configFile, "--listen", listen}, extraArgs...)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,7 +286,6 @@ func (h *harness) startServe(t *testing.T, token string, extraArgs ...string) st
 		mu.Unlock()
 		t.Fatalf("focal serve never reported listening:\n%s", log)
 	}
-	return "http://" + listen + "/"
 }
 
 // connectMCP opens an MCP session to url authenticating with token, using the

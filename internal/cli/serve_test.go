@@ -57,8 +57,27 @@ func TestServeListenDefaultsToLoopback(t *testing.T) {
 	if flag.DefValue != "127.0.0.1:8080" {
 		t.Errorf("--listen default = %q, want 127.0.0.1:8080", flag.DefValue)
 	}
-	if cmd.Flags().Lookup("allow-unauthenticated-listen") == nil {
-		t.Error("serve has no --allow-unauthenticated-listen flag")
+}
+
+// TestServeRejectsTheAllowUnauthenticatedListenFlagAsUnknown pins that there is
+// no longer a way to say "listen on TCP without a token": the flag that used to
+// say it is refused by the parser as a usage error, like any flag focal does
+// not have.
+func TestServeRejectsTheAllowUnauthenticatedListenFlagAsUnknown(t *testing.T) {
+	withConfig(t, "")
+	t.Setenv(upstreamTokenEnv, "")
+	s := newServeApp(t)
+
+	if newServeCommand(s.app).Flags().Lookup("allow-unauthenticated-listen") != nil {
+		t.Fatal("serve still has an --allow-unauthenticated-listen flag")
+	}
+	code := s.app.run([]string{"serve", "--allow-unauthenticated-listen"})
+
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want %d", code, exitUsage)
+	}
+	if got := s.stderr.String(); !strings.Contains(got, "unknown flag: --allow-unauthenticated-listen") {
+		t.Errorf("stderr = %q, want cobra's unknown flag error", got)
 	}
 }
 
@@ -122,94 +141,72 @@ func TestServeDescribesTheUpstreamTokenEnvironmentVariable(t *testing.T) {
 	if strings.Contains(cmd.Long, "--upstream-token") {
 		t.Errorf("serve's description still mentions the removed --upstream-token flag:\n%s", cmd.Long)
 	}
-	// The bind policy's second answer is only discoverable here: an
-	// operator who has a token has to learn that it is enough.
-	for _, want := range []string{"Bearer", "or an upstream token\nis set"} {
+	// The help is where an operator refused for having no token learns the
+	// three ways out: the token itself, the socket, and focal mcp.
+	for _, want := range []string{"Bearer", unixListenScheme, "focal mcp"} {
 		if !strings.Contains(cmd.Long, want) {
 			t.Errorf("serve's description does not mention %q:\n%s", want, cmd.Long)
 		}
 	}
+	if strings.Contains(cmd.Long, "--allow-unauthenticated-listen") {
+		t.Errorf("serve's description still mentions the removed --allow-unauthenticated-listen flag:\n%s", cmd.Long)
+	}
 }
 
-// TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable is the bind policy
-// with the second answer in it. focal refuses an address something off this
-// machine can reach unless it has been told why that is all right: either the
-// operator vouches for what is in front of it, or focal has a token of its own
-// to demand. The two are not the same reassurance, and neither is silent — a
-// token authenticates the caller but encrypts nothing, so the warning that
-// replaces the first one says so.
-func TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable(t *testing.T) {
-	tests := []struct {
-		name    string
-		options serveOptions
-		token   string
-		refused bool
-		want    []string
-		notWant []string
-	}{
-		{
-			name:    "neither",
-			options: serveOptions{listen: "0.0.0.0:0"},
-			refused: true,
-		},
-		{
-			name:    "the flag",
-			options: serveOptions{listen: "0.0.0.0:0", allowUnauthenticated: true},
-			want:    []string{"warning", "authentication"},
-		},
-		{
-			name:    "a token",
-			options: serveOptions{listen: "0.0.0.0:0"},
-			token:   testToken,
-			want:    []string{"warning", "TLS"},
-			notWant: []string{"authentication", testToken},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(upstreamTokenEnv, "")
+// TestListenOverTCPNeedsAToken is the bind policy: a TCP address, loopback or
+// not, is bound only when focal has a token to demand of every request.
+// Loopback keeps other machines out and nobody on this one, so it is no answer
+// on its own. The refusal names every way out, so an operator reading it does
+// not have to go looking.
+func TestListenOverTCPNeedsAToken(t *testing.T) {
+	for _, listen := range []string{"127.0.0.1:0", "[::1]:0", "0.0.0.0:0"} {
+		t.Run(listen, func(t *testing.T) {
 			s := newServeApp(t)
 
-			ln, err := s.app.listen(tt.options, tt.token)
-			if tt.refused {
-				if err == nil {
-					_ = ln.Close()
-					t.Fatal("focal bound a non-loopback address with nothing in front of it")
-				}
-				if err.code != exitUsage {
-					t.Errorf("exit code = %d, want %d", err.code, exitUsage)
-				}
-				if err.err.Code != "unauthenticated_listen_address" {
-					t.Fatalf("code = %q, want unauthenticated_listen_address", err.err.Code)
-				}
-				// Both ways out are offered, so an operator reading the
-				// refusal learns the token exists.
-				joined := strings.Join(err.err.Allowed, "\n")
-				for _, want := range []string{"--allow-unauthenticated-listen", upstreamTokenEnv} {
-					if !strings.Contains(joined, want) {
-						t.Errorf("allowed = %v, want it to name %s", err.err.Allowed, want)
-					}
-				}
-				return
+			ln, err := s.app.listen(serveOptions{listen: listen}, "")
+			if err == nil {
+				_ = ln.Close()
+				t.Fatalf("focal bound %s with no token to demand", listen)
 			}
-			if err != nil {
-				t.Fatalf("listen: %v", err.err)
+			if err.code != exitUsage {
+				t.Errorf("exit code = %d, want %d", err.code, exitUsage)
 			}
-			defer ln.Close()
-
-			got := s.stderr.String()
-			for _, want := range tt.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("stderr = %q, want it to mention %q", got, want)
+			if err.err.Code != "unauthenticated_listen_address" {
+				t.Fatalf("code = %q, want unauthenticated_listen_address", err.err.Code)
+			}
+			joined := strings.Join(err.err.Allowed, "\n")
+			for _, want := range []string{upstreamTokenEnv, "--listen " + unixListenScheme, "focal mcp"} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("allowed = %v, want it to name %s", err.err.Allowed, want)
 				}
 			}
-			for _, unwanted := range tt.notWant {
-				if strings.Contains(got, unwanted) {
-					t.Errorf("stderr = %q, want it not to mention %q", got, unwanted)
-				}
+			if strings.Contains(joined, "--allow-unauthenticated-listen") {
+				t.Errorf("allowed = %v, still offers the removed flag", err.err.Allowed)
 			}
 		})
 	}
+}
+
+// TestListenBeyondLoopbackWithATokenWarnsAboutPlaintext pins what is still true
+// once a token lets focal bind an address something off this machine can
+// reach: the token authenticates the caller but encrypts nothing, so focal
+// says so, without repeating the token.
+func TestListenBeyondLoopbackWithATokenWarnsAboutPlaintext(t *testing.T) {
+	s := newServeApp(t)
+
+	ln, err := s.app.listen(serveOptions{listen: "0.0.0.0:0"}, testToken)
+	if err != nil {
+		t.Fatalf("listen: %v", err.err)
+	}
+	defer ln.Close()
+
+	got := s.stderr.String()
+	for _, want := range []string{"warning", "TLS"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stderr = %q, want it to mention %q", got, want)
+		}
+	}
+	assertNoToken(t, got, testToken)
 }
 
 // TestListenBeyondLoopbackAcceptsATokenFromTheEnvironment pins that the bind
@@ -273,9 +270,9 @@ func TestListenAddressMustBeHostPort(t *testing.T) {
 	}
 }
 
-// TestListenBindsLoopbackWithATokenQuietly pins that the loopback warning is
-// about a missing token and nothing else: with one, focal itself refuses the
-// callers that cannot name it, so there is nothing left to say.
+// TestListenBindsLoopbackWithATokenQuietly pins that a loopback bind with a
+// token has nothing to warn about: focal itself refuses the callers that cannot
+// name it, and the token never leaves this machine.
 func TestListenBindsLoopbackWithATokenQuietly(t *testing.T) {
 	s := newServeApp(t)
 
@@ -290,59 +287,6 @@ func TestListenBindsLoopbackWithATokenQuietly(t *testing.T) {
 		t.Errorf("stderr = %q, want nothing for a loopback bind that demands a token", got)
 	}
 	assertNoToken(t, got, testToken)
-}
-
-// TestListenWarnsThatLoopbackIsOpenToEveryLocalCaller pins what the loopback
-// default still leaves open. Binding 127.0.0.1 keeps other hosts out and does
-// nothing about the rest of this one: any user and any process here can
-// connect and run inspections with the operator's keys and credentials. Not
-// refusing it is deliberate (it is the default, and the sound answer on a
-// machine one person uses), so saying so at startup is what focal does.
-func TestListenWarnsThatLoopbackIsOpenToEveryLocalCaller(t *testing.T) {
-	for _, listen := range []string{"127.0.0.1:0", "[::1]:0"} {
-		t.Run(listen, func(t *testing.T) {
-			s := newServeApp(t)
-
-			ln, err := s.app.listen(serveOptions{listen: listen}, "")
-			if err != nil {
-				t.Skipf("listen %s: %v", listen, err.err)
-			}
-			defer ln.Close()
-
-			// Where the lines wrap is not what is being pinned.
-			got := strings.Join(strings.Fields(s.stderr.String()), " ")
-			for _, want := range []string{
-				"warning",
-				listen,
-				"Any user and any process",
-				"SSH keys and AWS credentials",
-				upstreamTokenEnv,
-				unixListenScheme,
-				"0600",
-			} {
-				if !strings.Contains(got, want) {
-					t.Errorf("stderr = %q, want it to mention %q", got, want)
-				}
-			}
-		})
-	}
-}
-
-// TestListenBeyondLoopbackDoesNotAddTheLoopbackWarning keeps the two warnings
-// apart: an address something off this machine can reach has its own, and
-// repeating a local-callers note there would only bury it.
-func TestListenBeyondLoopbackDoesNotAddTheLoopbackWarning(t *testing.T) {
-	s := newServeApp(t)
-
-	ln, err := s.app.listen(serveOptions{listen: "0.0.0.0:0", allowUnauthenticated: true}, "")
-	if err != nil {
-		t.Fatalf("listen: %v", err.err)
-	}
-	defer ln.Close()
-
-	if got := s.stderr.String(); strings.Contains(strings.Join(strings.Fields(got), " "), "Any user and any process") {
-		t.Errorf("stderr = %q, want only the beyond-loopback warning", got)
-	}
 }
 
 // serveHost starts the whole of focal serve's HTTP surface — the real MCP
@@ -780,7 +724,7 @@ func TestServeOnStopsWithItsContext(t *testing.T) {
 	if herr != nil {
 		t.Fatalf("serveHandler: %v", herr.err)
 	}
-	ln, lerr := s.app.listen(serveOptions{listen: "127.0.0.1:0"}, "")
+	ln, lerr := s.app.listen(serveOptions{listen: "127.0.0.1:0"}, testToken)
 	if lerr != nil {
 		t.Fatalf("listen: %v", lerr.err)
 	}
@@ -809,9 +753,6 @@ func TestServeOnStopsWithItsContext(t *testing.T) {
 // through it is what lets these tests set the token the way an operator does.
 func serveUntilCancelled(s *serveApp, o serveOptions) *cliError {
 	args := []string{"serve", "--listen", o.listen}
-	if o.allowUnauthenticated {
-		args = append(args, "--allow-unauthenticated-listen")
-	}
 	for _, id := range o.identities {
 		args = append(args, "--identity", id)
 	}
@@ -855,19 +796,28 @@ func TestServeStartsOnABeyondLoopbackAddressWithATokenFromTheEnvironment(t *test
 	assertNoToken(t, got, testToken)
 }
 
-// TestServeWarnsOnLoopbackOnlyWithoutAToken is the same policy seen through
-// the whole of focal serve: the token resolved once for the invocation decides
-// whether the loopback note is written, and the token never is.
-func TestServeWarnsOnLoopbackOnlyWithoutAToken(t *testing.T) {
+// TestServeOverTCPStartsOnlyWithAToken is the same policy seen through the
+// whole of focal serve: the token resolved once for the invocation decides
+// whether the default loopback address is bound at all, and the token is never
+// written.
+func TestServeOverTCPStartsOnlyWithAToken(t *testing.T) {
 	t.Run("no token", func(t *testing.T) {
 		withConfig(t, "")
+		t.Setenv(upstreamTokenEnv, "")
 		s := newServeApp(t)
 
-		if err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"}); err != nil {
-			t.Fatalf("serve: %v", err.err)
+		err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"})
+		if err == nil {
+			t.Fatal("serve started on loopback TCP with no token")
 		}
-		if got := strings.Join(strings.Fields(s.stderr.String()), " "); !strings.Contains(got, "Any user and any process") {
-			t.Errorf("stderr = %q, want the warning that every local caller can connect", got)
+		if err.code != exitUsage {
+			t.Errorf("exit code = %d, want %d", err.code, exitUsage)
+		}
+		if got := s.stderr.String(); !strings.Contains(got, "unauthenticated_listen_address") {
+			t.Errorf("stderr = %q, want the unauthenticated_listen_address refusal", got)
+		}
+		if strings.Contains(s.stderr.String(), "listening on") {
+			t.Errorf("stderr = %q, want nothing bound", s.stderr.String())
 		}
 	})
 	t.Run("token from the environment", func(t *testing.T) {
@@ -880,9 +830,76 @@ func TestServeWarnsOnLoopbackOnlyWithoutAToken(t *testing.T) {
 		}
 		got := s.stderr.String()
 		if strings.Contains(got, "warning") {
-			t.Errorf("stderr = %q, want no warning when a token is demanded", got)
+			t.Errorf("stderr = %q, want no warning when a token is demanded on loopback", got)
 		}
 		assertNoToken(t, got, testToken)
+	})
+}
+
+// postWithHost sends one tools/list to url carrying host as its Host header and
+// authorization, when it is not empty, as its Authorization header, and returns
+// the status focal answered with.
+func postWithHost(t *testing.T, url, host, authorization string) int {
+	t.Helper()
+	body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	req, err := http.NewRequest(http.MethodPost, url, body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestServeLeavesHostUncheckedExactlyWhenItDemandsAToken pins the one rule for
+// the SDK's Host check: it is off when, and only when, the token check is in
+// front of the handler. A proxy forwards the external name it was addressed by,
+// and with a token that request is focal's to answer; without one the Host
+// check is still all that stands between a loopback bind and a rebinding
+// browser, so it stays.
+func TestServeLeavesHostUncheckedExactlyWhenItDemandsAToken(t *testing.T) {
+	const external = "focal.example.com"
+	for _, listen := range []string{"127.0.0.1:0", unixListenScheme + "/run/focal/focal.sock"} {
+		t.Run(listen+" with a token", func(t *testing.T) {
+			withConfig(t, "")
+			s := newServeApp(t)
+			handler, err := s.app.serveHandler(serveOptions{listen: listen}, testToken)
+			if err != nil {
+				t.Fatalf("serveHandler: %v", err.err)
+			}
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
+
+			if got := postWithHost(t, srv.URL, external, "Bearer "+testToken); got != http.StatusOK {
+				t.Errorf("external Host with the token: status = %d, want 200", got)
+			}
+			if got := postWithHost(t, srv.URL, external, ""); got != http.StatusUnauthorized {
+				t.Errorf("external Host without the token: status = %d, want 401", got)
+			}
+		})
+	}
+	t.Run("no token", func(t *testing.T) {
+		withConfig(t, "")
+		s := newServeApp(t)
+		handler, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, "")
+		if err != nil {
+			t.Fatalf("serveHandler: %v", err.err)
+		}
+		srv := httptest.NewServer(handler)
+		t.Cleanup(srv.Close)
+
+		if got := postWithHost(t, srv.URL, external, ""); got != http.StatusForbidden {
+			t.Errorf("external Host on a loopback connection with no token: status = %d, want 403", got)
+		}
 	})
 }
 

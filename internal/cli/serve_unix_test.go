@@ -84,11 +84,10 @@ func TestListenUnixCreatesASocketOnlyItsOwnerCanReach(t *testing.T) {
 	}
 }
 
-// TestListenUnixDoesNotApplyTheBindPolicy pins the decision that the two are
-// orthogonal: --allow-unauthenticated-listen answers whether something off
-// this machine can reach the address, and a socket on the filesystem has no
-// such address. So a Unix socket binds without the flag and without the
-// warning that flag exists to accompany.
+// TestListenUnixDoesNotApplyTheBindPolicy pins that the token TCP requires is
+// not required of a socket: the socket's 0600 is the boundary, and a socket on
+// the filesystem has no address for anything off this machine to reach. So a
+// Unix socket binds with no token and without a warning.
 func TestListenUnixDoesNotApplyTheBindPolicy(t *testing.T) {
 	s := newServeApp(t)
 
