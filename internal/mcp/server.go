@@ -16,11 +16,12 @@
 // sense the 2026-07-28 revision of the MCP specification means: no initialize
 // handshake, no session id, every POST self-contained. That is what lets focal
 // serve sit behind an ordinary authenticating reverse proxy, which is where
-// authenticating a user lives — focal does none of that, and binds to loopback
-// unless told otherwise. Over stdio (ServeStdio, focal mcp) there is a session
-// after all, one per process, and which protocol revision it speaks — the
-// initialize handshake or the per-request _meta of 2026-07-28 — is the SDK's
-// to settle with the client; this package does not narrow it.
+// authenticating a user lives — focal does none of that, and internal/cli
+// listens only behind a boundary of its own (a token, or a 0600 socket). Over
+// stdio (ServeStdio, focal mcp) there is a session after all, one per process,
+// and which protocol revision it speaks — the initialize handshake or the
+// per-request _meta of 2026-07-28 — is the SDK's to settle with the client;
+// this package does not narrow it.
 //
 // Nothing in this package reads the Authorization header, and nothing should.
 // The handler NewHandler returns answers whatever reaches it; deciding what may
@@ -71,6 +72,14 @@ type Options struct {
 	// must be positive. NewHandler does not read it: over HTTP the ceiling
 	// is on requests, and it is the caller's http.Handler that applies it.
 	MaxInFlight int
+	// DisableHostCheck turns off the SDK's DNS rebinding guard on the
+	// handler NewHandler returns: the refusal, with 403, of a request that
+	// arrived on a loopback connection naming a Host that is not loopback.
+	// The zero value leaves the guard on, so an Options that does not
+	// mention it is the safe one. Only a caller that has put a check of its
+	// own in front of the handler — one a rebinding browser cannot pass —
+	// should set it. ServeStdio does not read it: stdio has no Host.
+	DisableHostCheck bool
 }
 
 // NewHandler builds the HTTP handler that serves focal's operations over MCP.
@@ -81,9 +90,15 @@ func NewHandler(cfg config.Config, runner Runner, opts Options) http.Handler {
 	// of Streamable HTTP dropped the initialize handshake and the session id,
 	// and the SDK serves that revision over HTTP only in this mode. (stdio
 	// has no such mode: see ServeStdio.)
+	//
+	// The SDK's Host check is on unless the caller turned it off; see
+	// Options.DisableHostCheck for who may.
 	return sdk.NewStreamableHTTPHandler(
 		func(*http.Request) *sdk.Server { return srv },
-		&sdk.StreamableHTTPOptions{Stateless: true},
+		&sdk.StreamableHTTPOptions{
+			Stateless:                  true,
+			DisableLocalhostProtection: opts.DisableHostCheck,
+		},
 	)
 }
 

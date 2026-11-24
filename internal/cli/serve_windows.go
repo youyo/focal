@@ -22,13 +22,16 @@ func checkDirOwner(_ string, _ os.FileInfo) *result.Error { return nil }
 // permission bits, so neither the narrow creation nor the 0600 afterwards
 // would mean anything. A socket focal cannot restrict to its owner is not a
 // boundary, and offering one that looks like a boundary is worse than
-// offering none — so this refuses instead, and an operator on Windows puts an
-// authenticating proxy in front of a loopback address as before.
+// offering none — so this refuses instead, and an operator on Windows listens
+// on TCP with an upstream token, or uses focal mcp.
 func listenUnixSocket(_ string) (net.Listener, *cliError) {
 	return nil, usageError(
 		"unsupported_listen_address",
 		"focal cannot restrict a Unix domain socket to its owner on Windows, so it will not serve on one",
 		"--listen",
-		[]string{"host:port, e.g. " + defaultListenAddress},
+		[]string{
+			"host:port, e.g. " + defaultListenAddress + ", with " + upstreamTokenEnv + " set",
+			"focal mcp, to serve a single local client over stdio",
+		},
 	)
 }

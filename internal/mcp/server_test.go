@@ -580,3 +580,48 @@ func TestUnknownArgumentIsRejected(t *testing.T) {
 		t.Errorf("it reached the runner: %+v", runner.calls)
 	}
 }
+
+// postWithHost sends one tools/list to url carrying host as its Host header and
+// returns the status the handler answered with.
+func postWithHost(t *testing.T, url, host string) int {
+	t.Helper()
+	body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	req, err := http.NewRequest(http.MethodPost, url, body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestNewHandlerChecksHostByDefault pins the safe side of the Host check: an
+// Options nobody filled in keeps the SDK's refusal of a non-loopback Host on a
+// loopback connection, so forgetting the field can only leave the check on.
+func TestNewHandlerChecksHostByDefault(t *testing.T) {
+	url, _ := serverFor(t, "", Options{})
+
+	if got := postWithHost(t, url, "focal.example.com"); got != http.StatusForbidden {
+		t.Errorf("external Host on a loopback connection: status = %d, want 403", got)
+	}
+	if got := postWithHost(t, url, strings.TrimPrefix(url, "http://")); got != http.StatusOK {
+		t.Errorf("focal's own address as Host: status = %d, want 200", got)
+	}
+}
+
+// TestNewHandlerCanLeaveHostUnchecked is the other side: asked to, the handler
+// answers a request whatever Host it names, which is what a proxy in front of
+// focal forwards.
+func TestNewHandlerCanLeaveHostUnchecked(t *testing.T) {
+	url, _ := serverFor(t, "", Options{DisableHostCheck: true})
+
+	if got := postWithHost(t, url, "focal.example.com"); got != http.StatusOK {
+		t.Errorf("external Host with the check off: status = %d, want 200", got)
+	}
+}

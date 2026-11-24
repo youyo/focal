@@ -233,37 +233,108 @@ args = ["mcp", "--identity", "default=~/.ssh/id_ed25519"]
 
 `focal serve` は CLI と同じ operation を、stateless Streamable HTTP（MCP spec `2026-07-28`）の
 MCP tool として公開します。**focal 自身はユーザーを認証しません**（誰が呼んでいるかを判定する機構は
-持ちません）。既定で `127.0.0.1` にのみ bind し、それ以外のアドレスへ bind するには
-`--allow-unauthenticated-listen` を明示するか、後述の upstream token を設定する必要があります。
+持ちません）。
 
-**loopback への bind が防ぐのは別ホストからの到達だけです。** 同じマシン上の任意のユーザー・
-任意のプロセスは `127.0.0.1:8080` に接続でき、運用者の SSH 鍵・AWS 認証情報で検査を実行できます。
-共用ホストでは upstream token（`FOCAL_UPSTREAM_TOKEN`）を設定するか、`--listen unix:/path`
-の Unix ソケット（モード 0600）を使ってください。token なしで TCP の loopback アドレスへ
-bind すると、起動時に stderr へこの旨の警告を出します（token あり・Unix ソケットでは出ません）。
+**TCP で待ち受けるには、アドレスによらず upstream token（`FOCAL_UPSTREAM_TOKEN`）が必要です。**
+既定のアドレスは `127.0.0.1:8080` ですが、token が設定されていなければ loopback でも起動しません
+（`unauthenticated_listen_address` で拒否し、exit 2）。loopback が防ぐのは別ホストからの到達だけで、
+同じマシン上の別ユーザー・別プロセスは `127.0.0.1:8080` に接続でき、運用者の SSH 鍵・AWS 認証情報で
+検査を実行できてしまうからです。token なしで起動できるのは次の 2 つだけです。
+
+- `--listen unix:/path` の Unix ソケット（モード 0600）
+- ローカルの単一クライアントから使う場合の `focal mcp`（stdio。待ち受け口を開けません。上の節を参照）
+
+token は focal が生成しません。`openssl rand -hex 32` などで運用者が生成し、secret 管理から環境変数で
+渡してください。
 
 ```sh
+export FOCAL_UPSTREAM_TOKEN="$(cat /run/secrets/focal-upstream-token)"   # 例: secret 管理から読む
 focal serve --listen 127.0.0.1:8080 \
   --user ec2-user \
   --identity default=~/.ssh/id_ed25519 \
   --identity customer-a=~/.ssh/customer-a.pem
 ```
 
-focal と呼び出し元の間の境界を強化する手段が2つあります。どちらも単独で運用でき、併用もできます。
+focal と呼び出し元の間の境界は次の 2 つの手段で引きます。どちらも単独で運用でき、併用もできます。
 
 - **Unix domain socket**（`--listen unix:/run/focal/focal.sock`）— 境界をファイルシステムの
   パーミッションで引きます。socket は `0600` で作成されるため、reachable なのは focal を動かしている
   ユーザーだけで、別ホストからは原理的に到達できません。**`0600` が防ぐのは別ユーザーからのアクセスだけで、
-  同一ユーザーの別プロセスからの接続は防げません。** UDS 経由の bind では
-  `--allow-unauthenticated-listen` は不要かつ無関係です（ネットワーク到達性の判定そのものを行わないため）。
+  同一ユーザーの別プロセスからの接続は防げません。** UDS では token は不要です（設定されていれば、
+  UDS でも従来どおり token を要求します）。
 - **固定 shared secret**（環境変数 `FOCAL_UPSTREAM_TOKEN`）— 境界をリクエストに載る
   値で引きます。token が設定されているリクエストにのみ `Authorization: Bearer <token>` を要求し、
   一致しなければ `401`（body は固定文字列、token・設定値・スタック情報は含みません）を返します。token は
   32 バイト以上の可視 ASCII が必要です。コマンドライン引数はプロセス一覧から同じマシンの他ユーザーにも
   読めるため、token を渡すフラグはなく、環境変数だけで受け取ります（読み取った後は focal 自身の環境から
-  取り除かれ、起動する ssh には引き継がれません）。upstream token が設定されている場合、非 loopback bind は
-  `--allow-unauthenticated-listen` なしでも許可されますが、通信は暗号化されないため（token も応答も平文で
-  流れます）、loopback 以外で bind するなら前段に TLS 終端プロキシを置いてください。
+  取り除かれ、起動する ssh には引き継がれません）。TCP の待ち受けには必須です。token があれば
+  loopback 以外のアドレスにも bind できますが、通信は暗号化されないため（token も応答も平文で
+  流れます。起動時に stderr へ警告を出します）、loopback 以外で bind するなら前段に TLS 終端プロキシを
+  置いてください。token が設定されているとき、focal は `Host` ヘッダーを検査しません（前段のプロキシが
+  外部名の `Host` をそのまま転送しても、token が正しければ応答します）。
+
+### 前段にプロキシを置くときの要件
+
+`focal serve` の前に認証プロキシや TLS 終端プロキシを置くときは、待ち受けの形（loopback の TCP、
+loopback 以外の TCP、Unix ソケットのどれでも）によらず、次の要件を満たしてください。focal は `Host`
+ヘッダーを検査しません。届いたリクエストを誰が送ったのかを確かめるのは、前段のプロキシの責務です。
+
+- 利用者の認証は、リクエストごとに明示的に付く資格情報（`Authorization: Bearer` など）か、オリジンに
+  縛られた資格情報（`Domain` 属性の無い host-only の Cookie など）で行う。
+- 接続元だけで決まる認証（IP アドレスの許可リスト、tailnet の身元、Kerberos / Negotiate、クライアント
+  証明書、認証なし）を使う場合は、プロキシ自身が `Host` を自分の名前と照合するか、HTTPS だけで公開する。
+
+接続元だけで利用者を判断するプロキシは、ブラウザが開いた別のサイトからのリクエストも、正規の利用者の
+ものとして扱います。そのとき、プロキシが token を付けたまま focal へ転送してしまいます（DNS rebinding）。
+`Host` の照合か HTTPS だけの公開は、ブラウザが別のサイトの名前で届けたリクエストを、プロキシの段階で
+止めるための要件です。
+
+[idproxy](https://github.com/youyo/idproxy)（v0.10.2 以降）はこの要件を満たします。
+
+### token なしの loopback で動かしていた構成の移行
+
+token なしで TCP に待ち受けるためのフラグは廃止しました（指定すると未知のフラグとして exit 2 で失敗します）。
+token なしの TCP（`127.0.0.1:8080` など）で `focal serve` を動かしていた構成は、起動しなくなります。
+次のどちらかに移してください。手元の Coding Agent 1 つから使うだけなら、`focal mcp` に切り替えるのが
+いちばん簡単です。
+
+**Unix ソケットに移す（systemd の例）**
+
+```ini
+# /etc/systemd/system/focal.service
+[Service]
+User=focal
+RuntimeDirectory=focal          # /run/focal を focal ユーザー所有・0755 で作る
+ExecStart=/usr/local/bin/focal serve --listen unix:/run/focal/focal.sock \
+  --identity default=/home/focal/.ssh/id_ed25519
+```
+
+前段のプロキシは同じ UID で動かし、`unix:///run/focal/focal.sock` に接続させます（下の方式A）。
+
+**token を secret 管理から渡す（systemd / docker compose の例）**
+
+```ini
+# /etc/systemd/system/focal.service
+[Service]
+User=focal
+# 中身は FOCAL_UPSTREAM_TOKEN=<openssl rand -hex 32 の出力> の 1 行。所有者 root・モード 0600 にする
+EnvironmentFile=/etc/focal/upstream-token.env
+ExecStart=/usr/local/bin/focal serve --listen 127.0.0.1:8080 \
+  --identity default=/home/focal/.ssh/id_ed25519
+```
+
+```yaml
+services:
+  focal:
+    image: ghcr.io/youyo/focal:latest
+    command: ["serve", "--listen", "127.0.0.1:8080", "--identity", "default=/keys/id_ed25519"]
+    env_file:
+      - ./focal-token.env   # FOCAL_UPSTREAM_TOKEN=... の 1 行。リポジトリにコミットしない
+    # 127.0.0.1 はこのコンテナの loopback。前段のプロキシは network_mode で同じネットワーク
+    # namespace に置く（下の方式B）
+```
+
+前段のプロキシには同じ token を持たせ、`Authorization: Bearer <token>` を付けて転送させます（下の方式B）。
 
 - **host は allowlist にしません。** 制限すべきは「どこを見るか」ではなく「そこで何ができるか」であり、
   「突然渡されたサーバーを安全に調査させられる」ことが Focal の価値です。
@@ -348,6 +419,8 @@ volumes:
 **方式B: 固定 shared secret（コンテナ跨ぎ・別ホスト）**
 
 UID を揃えられない、あるいは focal と idproxy が別ホストにいる場合は upstream token を使います。
+token が設定されているとき、focal は `Host` ヘッダーを検査しません。idproxy が外部名の `Host`
+（`focal.example.com` など）をそのまま転送しても、loopback の待ち受けで拒否されることはありません。
 token はプレースホルダです。実値は `openssl rand -hex 32` 等で生成し、リポジトリにコミットしないでください。
 
 ```yaml
@@ -358,12 +431,13 @@ services:
       - "8443:8443"
     environment:
       EXTERNAL_URL: https://focal.example.com
-      UPSTREAM_URL: http://focal:8080
+      UPSTREAM_URL: http://127.0.0.1:8080   # focal と同じネットワーク namespace の loopback
       UPSTREAM_AUTH_TOKEN: "<FOCAL_UPSTREAM_TOKEN と同じ値>"   # idproxy 側が Authorization: Bearer として注入
     # OIDC プロバイダの設定等は idproxy 側のドキュメントを参照
 
   focal:
     image: ghcr.io/youyo/focal:latest
+    network_mode: "service:idproxy"   # idproxy のネットワーク namespace を共有する
     command: ["serve", "--listen", "127.0.0.1:8080", "--identity", "default=/keys/id_ed25519"]
     environment:
       FOCAL_UPSTREAM_TOKEN: "<32バイト以上の可視ASCII。プレースホルダ。実値は secret 管理に置く>"
@@ -385,12 +459,8 @@ Claude Desktop 側の接続手順の骨子:
 2. ブラウザで OIDC 認証を完了する（idproxy が Bearer トークンを発行する）。
 3. 以降 Claude Desktop から idproxy 経由で `inspect_*` ツールが呼び出せる。
 
-**`focal serve` は既定で `127.0.0.1` にのみ bind します。** ループバック以外のアドレスへ bind するには
-`--allow-unauthenticated-listen` を明示するか upstream token を設定する必要があり、どちらもなければ
-起動時エラーになります。ただしこれが防ぐのは別ホストからの到達だけで、同じマシンの別ユーザー・
-別プロセスからは到達できます（共用ホストでは token か Unix ソケット（0600）を使い、token なしの
-loopback bind では起動時に警告が出ます）。idproxy を前段に置く構成では `focal serve` はループバックの
-まま（または UDS で）起動し、外部への公開は idproxy 側が担います。
+**`focal serve` は token なしでは TCP に待ち受けません。** idproxy を前段に置く構成では、`focal serve` を
+UDS（方式A）か、token 付きのループバック（方式B）で起動し、外部への公開は idproxy 側が担います。
 
 ## セキュリティモデル
 
