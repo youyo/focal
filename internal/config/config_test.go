@@ -316,7 +316,7 @@ func TestLoadUnknownOperationName(t *testing.T) {
 	wantError(t, err, result.KindPolicy, "unknown_operation")
 }
 
-// TestConfigPathHonoursXDG covers the three location cases, including the one
+// TestConfigPathHonoursXDG covers the location cases, including the one
 // that must not fall back: XDG_CONFIG_HOME set but holding no config file.
 func TestConfigPathHonoursXDG(t *testing.T) {
 	const homeBody = "execution:\n  timeout: 90s\n"
@@ -338,6 +338,33 @@ func TestConfigPathHonoursXDG(t *testing.T) {
 
 		if got := mustLoad(t).Timeout(); got != 90*time.Second {
 			t.Errorf("Timeout() = %v, want the ~/.config file's 90s", got)
+		}
+	})
+
+	t.Run("xdg relative is ignored like unset", func(t *testing.T) {
+		_, home := isolate(t)
+		writeConfigAt(t, filepath.Join(home, ".config"), homeBody)
+		// A file the relative path would resolve to from the working
+		// directory must not be read in place of the home one.
+		cwd := t.TempDir()
+		writeConfigAt(t, filepath.Join(cwd, "rel"), "execution:\n  timeout: 45s\n")
+		t.Chdir(cwd)
+		t.Setenv("XDG_CONFIG_HOME", "rel")
+
+		if got := mustLoad(t).Timeout(); got != 90*time.Second {
+			t.Errorf("Timeout() = %v, want the ~/.config file's 90s; a relative XDG_CONFIG_HOME is invalid", got)
+		}
+	})
+
+	t.Run("xdg relative with no home file does not read the working directory", func(t *testing.T) {
+		isolate(t)
+		cwd := t.TempDir()
+		writeConfigAt(t, filepath.Join(cwd, "rel"), "execution:\n  timeout: 45s\n")
+		t.Chdir(cwd)
+		t.Setenv("XDG_CONFIG_HOME", "rel")
+
+		if got := mustLoad(t).Timeout(); got != 30*time.Second {
+			t.Errorf("Timeout() = %v, want the 30s default", got)
 		}
 	})
 
