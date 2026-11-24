@@ -802,13 +802,36 @@ func TestServeOnStopsWithItsContext(t *testing.T) {
 	}
 }
 
-// serveUntilCancelled runs a whole focal serve invocation with a context that
-// has already ended, so everything up to and including the bind happens and the
-// server then stops at once.
+// serveUntilCancelled runs a whole focal serve invocation, through the same
+// entry every command takes, with a context that has already ended: everything
+// up to and including the bind happens and the server then stops at once. The
+// entry is where the upstream token is read from the environment, so going
+// through it is what lets these tests set the token the way an operator does.
 func serveUntilCancelled(s *serveApp, o serveOptions) *cliError {
+	args := []string{"serve", "--listen", o.listen}
+	if o.allowUnauthenticated {
+		args = append(args, "--allow-unauthenticated-listen")
+	}
+	for _, id := range o.identities {
+		args = append(args, "--identity", id)
+	}
+	if o.user != "" {
+		args = append(args, "--user", o.user)
+	}
+	if o.config != "" {
+		args = append(args, "--config", o.config)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	return s.app.serve(ctx, o)
+	stderrBefore := s.stderr.Len()
+	if code := s.app.runContext(ctx, args); code != exitOK {
+		return &cliError{
+			err:  result.ExecutionError("serve_failed", s.stderr.String()[stderrBefore:]),
+			code: code,
+		}
+	}
+	return nil
 }
 
 // TestServeStartsOnABeyondLoopbackAddressWithATokenFromTheEnvironment pins that

@@ -56,8 +56,8 @@ const (
 // passed around and logged in test failures.
 //
 // It has side effects (it clears the environment variable), so it is called
-// once per invocation, at the start of serve, and the result is handed to
-// whatever needs it.
+// once per invocation, at the entry every command passes through
+// (app.runContext), and the result is handed to whatever needs it.
 func upstreamToken() string {
 	token := os.Getenv(upstreamTokenEnv)
 	// Every ssh(1) focal starts inherits this process's environment, and

@@ -240,6 +240,10 @@ func focalEnv(work, binDir string) []string {
 		"PATH":                 true,
 		"XDG_CONFIG_HOME":      true,
 		"FOCAL_UPSTREAM_TOKEN": true,
+		// The developer's ssh-agent would offer its keys before the
+		// test key, and sshd's MaxAuthTries can be spent before the
+		// test key is reached.
+		"SSH_AUTH_SOCK": true,
 	}
 	var env []string
 	for _, kv := range os.Environ() {
