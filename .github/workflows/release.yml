@@ -5,18 +5,39 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
+# Neither job gets a token scope from the repository setting; each states what
+# it needs.
+permissions: {}
 
 jobs:
-  release:
+  test:
+    # Runs the repository's own code, so it holds no secrets and can only read
+    # the tree. Anything that can publish waits for it in the release job.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - run: mise run build
+      - run: mise run test
+      - run: mise run test-race
+      - run: mise run lint
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -29,6 +50,12 @@ jobs:
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          # The token only has to push the Homebrew formula. The action hands
+          # `repositories` to the installation-token API as it is, and that API
+          # takes repository names (not owner/name, whatever the action's own
+          # description says); the owner is the installation's.
+          repositories: '["homebrew-tap"]'
+          permissions: '{"contents": "write"}'
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
