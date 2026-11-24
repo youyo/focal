@@ -33,8 +33,12 @@ import (
 
 // Execute runs focal with args (os.Args[1:]) and returns the process exit
 // code. It is the whole of this package's public surface.
-func Execute(args []string, stdout, stderr io.Writer) int {
-	return (&app{stdout: stdout, stderr: stderr, newExecutor: defaultExecutor}).run(args)
+//
+// stdin is read only by focal mcp, which speaks MCP over it and stdout. The
+// streams are taken from here rather than from package os so that which ones
+// a process uses is decided in cmd/focal alone.
+func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return (&app{stdin: stdin, stdout: stdout, stderr: stderr, newExecutor: defaultExecutor}).run(args)
 }
 
 // executorFactory builds the executor a run uses, for whichever transport the
@@ -62,9 +66,14 @@ func defaultExecutor(ctx context.Context, transport vo.Transport, sshOpts ssh.Op
 }
 
 type app struct {
+	stdin       io.Reader
 	stdout      io.Writer
 	stderr      io.Writer
 	newExecutor executorFactory
+	// token is the upstream token this invocation was started with, read
+	// from the environment once at the entry (see runContext) and the empty
+	// string when there was none.
+	token string
 }
 
 // globals are the flags that may appear before HOST. The set is deliberately
@@ -86,11 +95,26 @@ type globals struct {
 // cobra itself rejected (an unknown flag, a malformed --port) is restated in
 // the same schema rather than printed as a usage dump.
 func (a *app) run(args []string) int {
+	return a.runContext(context.Background(), args)
+}
+
+// runContext is run under ctx, which the subcommands that keep running — focal
+// serve and focal mcp — stop with.
+func (a *app) runContext(ctx context.Context, args []string) int {
+	// The token is taken out of the environment before anything else runs,
+	// whichever command this turns out to be. Every command may start ssh(1),
+	// which inherits this process's environment, and only focal serve has a
+	// use for the token; reading it here, once, is what keeps it from
+	// reaching a child process of any other command. focal serve is handed
+	// the value from here rather than looking again, because by then there
+	// is nothing left to look at.
+	a.token = upstreamToken()
+
 	var g globals
 	cmd := a.newRootCommand(&g)
 	cmd.SetArgs(args)
 
-	err := cmd.Execute()
+	err := cmd.ExecuteContext(ctx)
 	if err == nil {
 		return exitOK
 	}
@@ -162,6 +186,7 @@ func (a *app) newRootCommand(g *globals) *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("json", "pretty")
 
 	cmd.AddCommand(newServeCommand(a))
+	cmd.AddCommand(newMCPCommand(a))
 
 	return cmd
 }

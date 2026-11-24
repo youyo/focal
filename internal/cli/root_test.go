@@ -133,7 +133,7 @@ func TestBuildVersion(t *testing.T) {
 
 func TestExecute_Version(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Execute([]string{"--version"}, &stdout, &stderr)
+	code := Execute([]string{"--version"}, strings.NewReader(""), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, exitOK, stderr.String())
 	}
@@ -407,7 +407,9 @@ func TestNoEscapeHatch(t *testing.T) {
 		}
 	})
 
-	t.Run("only serve as a subcommand", func(t *testing.T) {
+	// The subcommands are the two ways to serve the same operations over
+	// MCP — HTTP and stdio — and nothing else: neither takes a command.
+	t.Run("only serve and mcp as subcommands", func(t *testing.T) {
 		var g globals
 		cmd := (&app{stdout: io.Discard, stderr: io.Discard}).newRootCommand(&g)
 		subs := cmd.Commands()
@@ -415,8 +417,8 @@ func TestNoEscapeHatch(t *testing.T) {
 		for _, sub := range subs {
 			names = append(names, sub.Name())
 		}
-		if !slices.Equal(names, []string{"serve"}) {
-			t.Fatalf("root has subcommands %v, want [serve]", names)
+		if !slices.Equal(names, []string{"mcp", "serve"}) {
+			t.Fatalf("root has subcommands %v, want [mcp serve]", names)
 		}
 	})
 }
@@ -638,7 +640,7 @@ func TestIdentityFlag_ExpandsHome(t *testing.T) {
 // not have or omit one it does.
 func TestHelpListsTheOperations(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Execute([]string{"--help"}, &stdout, &stderr)
+	code := Execute([]string{"--help"}, strings.NewReader(""), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
 	}
@@ -757,5 +759,31 @@ func TestServeIsReachableAsASubcommand(t *testing.T) {
 	}
 	if !strings.Contains(res.stdout, "focal serve exposes") {
 		t.Fatalf("stdout = %q, want the serve command's help text", res.stdout)
+	}
+}
+
+// TestEveryInvocationDropsTheUpstreamToken pins where the shared secret leaves
+// the environment: at the one entry every command passes through, not inside
+// focal serve. A command that never reads the token still starts ssh(1), which
+// inherits this process's environment, and an operator's "SendEnv FOCAL_*"
+// would otherwise carry the secret to the host being inspected.
+func TestEveryInvocationDropsTheUpstreamToken(t *testing.T) {
+	for name, args := range map[string][]string{
+		"HOST OPERATION": {"prod-web", "system"},
+		"--version":      {"--version"},
+		"a usage error":  {"--bogus"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withConfig(t, "")
+			t.Setenv(upstreamTokenEnv, testToken)
+
+			res := runCLI(t, args...)
+
+			if got, set := os.LookupEnv(upstreamTokenEnv); set || got != "" {
+				t.Errorf("%s is still in the environment after `focal %s` (exit %d)",
+					upstreamTokenEnv, strings.Join(args, " "), res.code)
+			}
+			assertNoToken(t, res.stdout+res.stderr, testToken)
+		})
 	}
 }

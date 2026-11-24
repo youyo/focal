@@ -11,11 +11,16 @@
 // invocation itself) belongs to whoever implements Runner; see internal/cli's
 // focal serve.
 //
-// The server is stateless in the sense the 2026-07-28 revision of the MCP
-// specification means: no initialize handshake, no session id, every POST
-// self-contained. That is what lets focal serve sit behind an ordinary
-// authenticating reverse proxy, which is where authenticating a user lives —
-// focal does none of that, and binds to loopback unless told otherwise.
+// The tools are registered once, by one function, and offered two ways. Over
+// Streamable HTTP (NewHandler, focal serve) the server is stateless in the
+// sense the 2026-07-28 revision of the MCP specification means: no initialize
+// handshake, no session id, every POST self-contained. That is what lets focal
+// serve sit behind an ordinary authenticating reverse proxy, which is where
+// authenticating a user lives — focal does none of that, and binds to loopback
+// unless told otherwise. Over stdio (ServeStdio, focal mcp) there is a session
+// after all, one per process, and which protocol revision it speaks — the
+// initialize handshake or the per-request _meta of 2026-07-28 — is the SDK's
+// to settle with the client; this package does not narrow it.
 //
 // Nothing in this package reads the Authorization header, and nothing should.
 // The handler NewHandler returns answers whatever reaches it; deciding what may
@@ -52,9 +57,9 @@ type Runner interface {
 	Run(ctx context.Context, op operation.Operation, target vo.Target, identity string, transport vo.Transport) (result.Envelope, *result.Error)
 }
 
-// Options are the server-wide defaults a focal serve invocation was started
-// with. They are defaults in the strict sense: a tool call that names a value
-// itself is never overridden by one.
+// Options are the server-wide settings a focal serve or focal mcp invocation
+// was started with. Version and DefaultUser are defaults in the strict sense: a
+// tool call that names a value itself is never overridden by one.
 type Options struct {
 	// Version is what the server reports as its implementation version.
 	Version string
@@ -62,14 +67,32 @@ type Options struct {
 	// name one, or the empty string to leave the choice to ssh(1) and
 	// ~/.ssh/config.
 	DefaultUser string
+	// MaxInFlight is how many tool calls ServeStdio lets run at once. It
+	// must be positive. NewHandler does not read it: over HTTP the ceiling
+	// is on requests, and it is the caller's http.Handler that applies it.
+	MaxInFlight int
 }
 
 // NewHandler builds the HTTP handler that serves focal's operations over MCP.
-// Only the operations this installation has enabled become tools, and the set
-// is fixed here at startup: an operation the configuration turned off has no
-// tool to list and no tool to call, so it is refused before a target is even
-// parsed.
 func NewHandler(cfg config.Config, runner Runner, opts Options) http.Handler {
+	srv := newServer(cfg, runner, opts)
+
+	// Stateless is not a tuning knob, on this path: the 2026-07-28 revision
+	// of Streamable HTTP dropped the initialize handshake and the session id,
+	// and the SDK serves that revision over HTTP only in this mode. (stdio
+	// has no such mode: see ServeStdio.)
+	return sdk.NewStreamableHTTPHandler(
+		func(*http.Request) *sdk.Server { return srv },
+		&sdk.StreamableHTTPOptions{Stateless: true},
+	)
+}
+
+// newServer is the one place focal's tools are registered, for every way they
+// are offered. Only the operations this installation has enabled become tools,
+// and the set is fixed here at startup: an operation the configuration turned
+// off has no tool to list and no tool to call, so it is refused before a
+// target is even parsed.
+func newServer(cfg config.Config, runner Runner, opts Options) *sdk.Server {
 	s := &server{
 		cfg:    cfg,
 		runner: runner,
@@ -92,14 +115,7 @@ func NewHandler(cfg config.Config, runner Runner, opts Options) http.Handler {
 		}
 		spec.add(srv, s, name, spec.summary)
 	}
-
-	// Stateless is not a tuning knob: the 2026-07-28 revision dropped the
-	// initialize handshake and the session id, and the SDK serves that
-	// revision only in this mode.
-	return sdk.NewStreamableHTTPHandler(
-		func(*http.Request) *sdk.Server { return srv },
-		&sdk.StreamableHTTPOptions{Stateless: true},
-	)
+	return srv
 }
 
 type server struct {

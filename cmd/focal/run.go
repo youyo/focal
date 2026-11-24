@@ -10,6 +10,6 @@ import (
 	"github.com/youyo/focal/internal/cli"
 )
 
-func run(args []string, stdout, stderr io.Writer) int {
-	return cli.Execute(args, stdout, stderr)
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return cli.Execute(args, stdin, stdout, stderr)
 }

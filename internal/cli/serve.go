@@ -110,6 +110,9 @@ const (
 	// a source of trouble to the host it is pointed at. Requests over the
 	// ceiling wait rather than fail, so a burst is slowed instead of being
 	// turned into errors the agent has to reason about.
+	//
+	// focal mcp applies the same figure to tool calls over stdio (see
+	// internal/mcp's ServeStdio); this is the one place it is defined.
 	serveMaxInFlight = 8
 )
 
@@ -179,10 +182,10 @@ func newServeCommand(a *app) *cobra.Command {
 // so a misconfigured server never reaches a state where an agent could reach
 // it.
 func (a *app) serve(ctx context.Context, o serveOptions) *cliError {
-	// The token is resolved here, once: resolving it drops it from the
-	// environment, so the handler and the bind policy must be given the same
-	// value rather than each asking again.
-	token := upstreamToken()
+	// The token was resolved once, at the entry, which also dropped it from
+	// the environment; the handler and the bind policy are given that same
+	// value.
+	token := a.token
 	handler, err := a.serveHandler(o, token)
 	if err != nil {
 		return err
@@ -205,19 +208,14 @@ type serveHandler struct {
 // builds the MCP handler over them, behind the token check when there is one.
 // token is the shared secret in force, as resolved by upstreamToken.
 func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliError) {
-	cfg, cfgErr := loadConfigFrom(o.config)
-	if cfgErr != nil {
-		return nil, rejected(cfgErr)
-	}
-	ids, idsErr := newIdentities(o.identities)
-	if idsErr != nil {
-		return nil, usageError(idsErr.Code, idsErr.Message, idsErr.Field, idsErr.Allowed)
+	cfg, runner, err := a.newServeRunner(o.config, o.identities)
+	if err != nil {
+		return nil, err
 	}
 	auth, authErr := newUpstreamAuth(token)
 	if authErr != nil {
 		return nil, usageError(authErr.Code, authErr.Message, authErr.Field, authErr.Allowed)
 	}
-	runner := &serveRunner{cfg: cfg, identities: ids, newExecutor: a.newExecutor}
 	handler := mcp.NewHandler(cfg, runner, mcp.Options{
 		Version:     buildVersion(),
 		DefaultUser: o.user,
@@ -236,6 +234,23 @@ func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliErr
 		handler = auth.wrap(handler)
 	}
 	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor}, nil
+}
+
+// newServeRunner loads the configuration and registers the identity aliases
+// one MCP invocation — focal serve or focal mcp — was started with, and builds
+// the Runner its tools reach hosts through. Both commands come through here, so
+// a configuration file or a key registration is refused, and a tool call
+// resolved, the same way whichever of them is serving.
+func (a *app) newServeRunner(configPath string, identitySpecs []string) (config.Config, *serveRunner, *cliError) {
+	cfg, cfgErr := loadConfigFrom(configPath)
+	if cfgErr != nil {
+		return config.Config{}, nil, rejected(cfgErr)
+	}
+	ids, idsErr := newIdentities(identitySpecs)
+	if idsErr != nil {
+		return config.Config{}, nil, usageError(idsErr.Code, idsErr.Message, idsErr.Field, idsErr.Allowed)
+	}
+	return cfg, &serveRunner{cfg: cfg, identities: ids, newExecutor: a.newExecutor}, nil
 }
 
 // limitInFlight caps how many requests are being worked on at once, holding the

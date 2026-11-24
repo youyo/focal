@@ -170,6 +170,65 @@ operation だけ `sudo -n` を前置し（SSH と同じ最初の判断）、`aut
 `execution.max_output` を超えた出力は、SSH transport と同じく `truncated: true` として報告されます
 （S3 への完全な出力保存は ROADMAP 参照）。
 
+## MCP over stdio（`focal mcp`）
+
+`focal mcp` は `focal serve` と同じ MCP tool を、stdin / stdout で提供します。MCP クライアントが
+focal を子プロセスとして起動し、改行区切りの JSON-RPC でやり取りする形です。手元の Coding Agent
+1 つから使うだけなら、待ち受け口を開ける `focal serve` ではなくこちらを使ってください
+（[ADR 0008](docs/adr/0008-stdio-transport-and-serve-auth-default.md)）。
+
+```sh
+focal mcp [--identity alias=path]... [--user USER] [--config PATH]
+```
+
+- `--identity` / `--user` / `--config` の意味は `focal serve` と同じです。ツールの一覧・引数・結果・
+  identity alias の解決順序も `focal serve` と同じです（下の「MCP（`focal serve`）」を参照）。
+- 待ち受け口を持たないので、`--listen` などの待ち受けのフラグはありません。upstream token も使いません。
+  `FOCAL_UPSTREAM_TOKEN` が設定されていると、使わないことを stderr に知らせます
+  （値は表示しません）。この変数はどのコマンドでも起動時に focal 自身の環境から取り除かれ、
+  起動する ssh には引き継がれません。
+- stdout には MCP の JSON-RPC メッセージだけを書きます。ログや警告は stderr に出ます。
+  起動時に拒否した場合（設定ファイルや identity の誤り、未知のフラグなど）は、ほかのコマンドと同じ
+  エラー JSON を stderr に書き、stdout には何も書きません。
+- 同時に実行する tool call は 8 つまでです（`focal serve` と同じ上限）。それを超えた呼び出しは待ちます。
+- クライアントが stdin を閉じるか、SIGINT / SIGTERM を受けると、実行中の処理を止めて終了コード 0 で
+  終了します（5 秒未満）。stdin に JSON として読めない行が届いた場合は、エラー JSON を stderr に書いて
+  終了コード 1 で終了します。
+- プロトコル版は go-sdk に任せています。`initialize` を送る流儀と、リクエストごとに `_meta` を付ける
+  `2026-07-28` の流儀のどちらでも話せます。
+
+Claude Code に登録する例（`claude mcp add` か、プロジェクトの `.mcp.json`）:
+
+```sh
+claude mcp add focal -- focal mcp --identity default=~/.ssh/id_ed25519
+```
+
+```json
+{
+  "mcpServers": {
+    "focal": {
+      "command": "focal",
+      "args": ["mcp", "--identity", "default=~/.ssh/id_ed25519"]
+    }
+  }
+}
+```
+
+Codex に登録する例（`~/.codex/config.toml`）:
+
+```toml
+[mcp_servers.focal]
+command = "focal"
+args = ["mcp", "--identity", "default=~/.ssh/id_ed25519"]
+```
+
+`--identity` のパスの先頭の `~/` は focal 自身がホームディレクトリに展開するので、シェルを経由しない
+起動でもそのまま書けます。
+
+`mcp` という名前のホストは、`serve` と同じくサブコマンドの陰に隠れます。`focal mcp system` は
+`mcp` サブコマンドとして解釈され、使い方の誤りとして拒否されます。`user@mcp` と書くか、
+`~/.ssh/config` で別名を付けてください。
+
 ## MCP（`focal serve`）
 
 `focal serve` は CLI と同じ operation を、stateless Streamable HTTP（MCP spec `2026-07-28`）の
@@ -246,11 +305,10 @@ focal serve
 Target Server
 ```
 
-idproxy と focal の間（`UPSTREAM_URL`）は、既定では平文 HTTP かつ focal 側に認証がないため、
-同一ホスト／同一信頼境界での利用を前提とします。この間を強化する方式を idproxy 側が
-（[youyo/idproxy#33](https://github.com/youyo/idproxy/issues/33) /
-[#34](https://github.com/youyo/idproxy/issues/34)）で対応するまでは、以下の focal 側設定を
-入れても idproxy はまだ利用しません。対応後に有効になります。
+idproxy と focal の間（`UPSTREAM_URL`）は平文で、focal 自身は利用者を認証しません。この間の境界は、
+次の方式A・方式Bのどちらかで引いてください。idproxy は v0.10.2 以降で、Unix domain socket の上流への接続
+（[youyo/idproxy#33](https://github.com/youyo/idproxy/issues/33)）と、上流への固定の `Authorization`
+ヘッダーの付与（[#34](https://github.com/youyo/idproxy/issues/34)）に対応しています。
 
 **方式A: Unix domain socket（同一ホスト推奨）**
 
@@ -269,7 +327,7 @@ services:
       - "8443:8443"
     environment:
       EXTERNAL_URL: https://focal.example.com
-      UPSTREAM_URL: unix:///run/focal/focal.sock   # idproxy #33/#34 対応後に有効
+      UPSTREAM_URL: unix:///run/focal/focal.sock   # idproxy v0.10.2 以降
     volumes:
       - focal-sock:/run/focal
     # OIDC プロバイダの設定等は idproxy 側のドキュメントを参照
@@ -371,7 +429,9 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - [0003. YAML ライブラリに goccy/go-yaml を採用する](docs/adr/0003-yaml-library-selection.md)
 - [0004. Remote MCP でも `.ssh/config` の解釈を OpenSSH に完全委任する](docs/adr/0004-delegate-ssh-config-in-remote-mcp.md)
 - [0005. MCP SDK に modelcontextprotocol/go-sdk を採用し stateless Streamable HTTP で提供する](docs/adr/0005-mcp-sdk-and-stateless-transport.md)
+- [0006. E2E テストは build tag 隔離 + docker compose + go-sdk クライアントで構成し CI 別ジョブで実行する](docs/adr/0006-e2e-test-strategy.md)
 - [0007. AWS SSM Run Command を第二の transport として追加する](docs/adr/0007-ssm-transport.md)
+- [0008. stdio で MCP を提供する `focal mcp` を追加し、`focal serve` の TCP 待ち受けでは token を必須にする](docs/adr/0008-stdio-transport-and-serve-auth-default.md)
 
 ## ROADMAP（v0.1 スコープ外）
 
