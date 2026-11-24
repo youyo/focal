@@ -29,9 +29,9 @@ import (
 // builds.
 
 const (
-	// upstreamTokenEnv is where focal prefers to be given the token: an
-	// environment variable is not in the process list the way an argument
-	// is.
+	// upstreamTokenEnv is where focal is given the token, and the only place:
+	// an environment variable is not in the process list the way an argument
+	// is, so focal has no flag for it.
 	upstreamTokenEnv = "FOCAL_UPSTREAM_TOKEN" //nolint:gosec // the name of the variable, not a secret
 	// minUpstreamTokenLen is the shortest shared secret focal will accept,
 	// in bytes. A long-lived bearer token is guessed offline at whatever
@@ -49,24 +49,27 @@ const (
 )
 
 // upstreamToken is the shared secret this invocation was started with, or the
-// empty string when it was started with none.
+// empty string when it was started with none. The environment is the only way
+// to give one: an argument is readable by every process on the machine for as
+// long as focal runs, so there is no flag for it. Reading it here rather than
+// storing it on serveOptions also keeps the secret out of the struct that gets
+// passed around and logged in test failures.
 //
-// The layering is the one every other override in focal uses: what the command
-// line said wins, and the environment fills in for a command line that said
-// nothing. Reading it here rather than storing it on serveOptions keeps the
-// secret out of the struct that gets passed around and logged in test
-// failures.
-func upstreamToken(o serveOptions) string {
-	if o.upstreamToken != "" {
-		return o.upstreamToken
-	}
+// It has side effects (it clears the environment variable), so it is called
+// once per invocation, at the start of serve, and the result is handed to
+// whatever needs it.
+func upstreamToken() string {
 	token := os.Getenv(upstreamTokenEnv)
 	// Every ssh(1) focal starts inherits this process's environment, and
 	// focal deliberately honours the operator's own ~/.ssh/config — a
 	// "SendEnv FOCAL_*" there would carry the shared secret to the very
-	// hosts focal is inspecting. The variable has been read, so drop it:
-	// nothing downstream reads it again, and what is not in the environment
-	// cannot be forwarded or read out of /proc/<pid>/environ.
+	// hosts focal is inspecting. It is read once here, nothing downstream
+	// reads it again, and a child process started afterwards does not
+	// inherit it.
+	//
+	// This keeps the secret out of the children focal starts. It does not
+	// scrub focal's own initial environment block, which the operating
+	// system may still expose to anything allowed to read it.
 	os.Unsetenv(upstreamTokenEnv)
 	return token
 }
@@ -117,11 +120,10 @@ func invalidUpstreamToken(format string, args ...any) *result.Error {
 	return result.ValidationError(
 		"invalid_upstream_token",
 		fmt.Sprintf(format, args...),
-		"--upstream-token",
+		upstreamTokenEnv,
 		[]string{fmt.Sprintf(
-			"at least %d bytes of printable ASCII, e.g. the output of `openssl rand -hex 32`, "+
-				"preferably given in %s rather than on the command line",
-			minUpstreamTokenLen, upstreamTokenEnv)},
+			"at least %d bytes of printable ASCII, e.g. the output of `openssl rand -hex 32`",
+			minUpstreamTokenLen)},
 	)
 }
 

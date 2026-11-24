@@ -66,7 +66,7 @@ func TestListenUnixCreatesASocketOnlyItsOwnerCanReach(t *testing.T) {
 	s := newServeApp(t)
 	path := socketPath(t)
 
-	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + path})
+	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + path}, "")
 	if err != nil {
 		t.Fatalf("listen: %v", err.err)
 	}
@@ -92,7 +92,7 @@ func TestListenUnixCreatesASocketOnlyItsOwnerCanReach(t *testing.T) {
 func TestListenUnixDoesNotApplyTheBindPolicy(t *testing.T) {
 	s := newServeApp(t)
 
-	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + socketPath(t)})
+	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + socketPath(t)}, "")
 	if err != nil {
 		t.Fatalf("listen: %v", err.err)
 	}
@@ -110,7 +110,7 @@ func TestListenUnixRestoresTheUmask(t *testing.T) {
 	s := newServeApp(t)
 	before := currentUmask()
 
-	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + socketPath(t)})
+	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + socketPath(t)}, "")
 	if err != nil {
 		t.Fatalf("listen: %v", err.err)
 	}
@@ -134,7 +134,7 @@ func TestListenUnixRefusesASocketSomethingIsListeningOn(t *testing.T) {
 	}
 	defer other.Close()
 
-	ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path})
+	ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path}, "")
 	if cliErr == nil {
 		_ = ln.Close()
 		t.Fatal("focal took over a socket another process was listening on")
@@ -164,7 +164,7 @@ func TestListenUnixReplacesAStaleSocket(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path})
+	ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path}, "")
 	if cliErr != nil {
 		t.Fatalf("a stale socket was not replaced: %v", cliErr.err)
 	}
@@ -201,7 +201,7 @@ func TestListenUnixRefusesToRemoveWhatIsNotASocket(t *testing.T) {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			s := newServeApp(t)
 
-			ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path})
+			ln, cliErr := s.app.listen(serveOptions{listen: unixListenScheme + path}, "")
 			if cliErr == nil {
 				_ = ln.Close()
 				t.Fatal("a path that was not a socket was accepted")
@@ -242,7 +242,7 @@ func TestListenUnixRejectsAnUnusablePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newServeApp(t)
 
-			ln, err := s.app.listen(serveOptions{listen: unixListenScheme + tt.path})
+			ln, err := s.app.listen(serveOptions{listen: unixListenScheme + tt.path}, "")
 			if err == nil {
 				_ = ln.Close()
 				t.Fatalf("%q was accepted", tt.path)
@@ -269,7 +269,7 @@ func TestListenUnixAcceptsAStickyDirectory(t *testing.T) {
 	mkdirMode(t, sticky, 0o777|os.ModeSticky)
 
 	s := newServeApp(t)
-	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + filepath.Join(sticky, "focal.sock")})
+	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + filepath.Join(sticky, "focal.sock")}, "")
 	if err != nil {
 		t.Fatalf("a sticky directory was refused: %v", err.err)
 	}
@@ -285,11 +285,11 @@ func TestServeOverAUnixSocket(t *testing.T) {
 	path := socketPath(t)
 	o := serveOptions{listen: unixListenScheme + path}
 
-	handler, herr := s.app.serveHandler(o)
+	handler, herr := s.app.serveHandler(o, "")
 	if herr != nil {
 		t.Fatalf("serveHandler: %v", herr.err)
 	}
-	ln, lerr := s.app.listen(o)
+	ln, lerr := s.app.listen(o, "")
 	if lerr != nil {
 		t.Fatalf("listen: %v", lerr.err)
 	}
@@ -320,5 +320,79 @@ func TestServeOverAUnixSocket(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the socket file outlived the server: %v", err)
+	}
+}
+
+// symlinkedSocketDir returns a real directory, a symlink to it, and the
+// directory's fully resolved path, all under a temp directory focal accepts.
+func symlinkedSocketDir(t *testing.T) (link, real, resolvedReal string) {
+	t.Helper()
+	base := socketDir(t)
+	real = filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	link = filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	return link, real, resolvedReal
+}
+
+// TestCheckUnixSocketPathReturnsThePathItJudged pins that what focal checked is
+// what focal binds. The check resolves symlinks to judge the directories that
+// are really on the way to the socket, so it has to hand back that resolved
+// path: bind to the spelling the caller gave and the link can be pointed
+// somewhere else between the check and the bind, where none of it was judged.
+func TestCheckUnixSocketPathReturnsThePathItJudged(t *testing.T) {
+	link, _, resolvedReal := symlinkedSocketDir(t)
+
+	got, err := checkUnixSocketPath(filepath.Join(link, "focal.sock"))
+	if err != nil {
+		t.Fatalf("checkUnixSocketPath: %v", err)
+	}
+	if want := filepath.Join(resolvedReal, "focal.sock"); got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+}
+
+// TestCheckUnixSocketPathRefusesANameThatLeavesTheCheckedDirectory keeps the
+// final component from being anything but one name inside the directory that
+// was judged: ".." and "." would name a different directory than the one
+// checked.
+func TestCheckUnixSocketPathRefusesANameThatLeavesTheCheckedDirectory(t *testing.T) {
+	dir := socketDir(t)
+	for _, path := range []string{dir + "/..", dir + "/.", dir + "/"} {
+		t.Run(path, func(t *testing.T) {
+			if got, err := checkUnixSocketPath(path); err == nil {
+				t.Errorf("%q was accepted as %q", path, got)
+			}
+		})
+	}
+}
+
+// TestListenUnixBindsInTheDirectoryItChecked is the symlink case through the
+// whole bind: the socket appears in the directory the link resolves to, and a
+// stale socket left there is the one that is replaced.
+func TestListenUnixBindsInTheDirectoryItChecked(t *testing.T) {
+	link, real, _ := symlinkedSocketDir(t)
+	s := newServeApp(t)
+
+	ln, err := s.app.listen(serveOptions{listen: unixListenScheme + filepath.Join(link, "focal.sock")}, "")
+	if err != nil {
+		t.Fatalf("listen: %v", err.err)
+	}
+	defer ln.Close()
+
+	info, statErr := os.Lstat(filepath.Join(real, "focal.sock"))
+	if statErr != nil {
+		t.Fatalf("no socket in the resolved directory: %v", statErr)
+	}
+	if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != unixSocketMode {
+		t.Errorf("mode = %v, want a 0600 socket", info.Mode())
 	}
 }

@@ -153,12 +153,14 @@ func loadFrom(path string, requireExists bool) (Config, *result.Error) {
 	return build(raw)
 }
 
-// configPath follows the XDG base directory spec. XDG_CONFIG_HOME is honoured
-// exactly: when it is set, that is the only place Focal looks, because falling
-// back to ~/.config would let a file the administrator meant to override take
-// effect anyway.
+// configPath follows the XDG base directory spec. An absolute XDG_CONFIG_HOME
+// is honoured exactly: when it is set, that is the only place Focal looks,
+// because falling back to ~/.config would let a file the administrator meant to
+// override take effect anyway. The spec says a relative path is invalid and must
+// be ignored, so it is treated as unset; otherwise the file read would depend on
+// the working directory the process happens to start in.
 func configPath() (string, *result.Error) {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
 		return filepath.Join(dir, "focal", "config.yaml"), nil
 	}
 	home, err := os.UserHomeDir()

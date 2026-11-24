@@ -37,7 +37,7 @@ import (
 // filesystem rather than in the network: the socket is created 0600, so what
 // may reach focal is whatever runs as the user focal runs as, and reaching it
 // from another machine is not a thing that can be arranged. A shared secret
-// (--upstream-token, see auth.go) draws it in the request instead: focal
+// (FOCAL_UPSTREAM_TOKEN, see auth.go) draws it in the request instead: focal
 // answers nothing that does not carry the token it was started with. Neither
 // knows who the caller is, both compose with the other, and either is enough
 // to make a non-loopback bind something the operator chose rather than
@@ -120,10 +120,6 @@ type serveOptions struct {
 	identities           []string
 	user                 string
 	config               string
-	// upstreamToken is --upstream-token as it was given, which is not
-	// necessarily the token in force: see upstreamToken in auth.go, which
-	// falls back to the environment.
-	upstreamToken string
 }
 
 // newServeCommand builds the serve subcommand. Its flags describe where to
@@ -140,7 +136,7 @@ func newServeCommand(a *app) *cobra.Command {
 			"front of it. It binds to loopback and refuses any other address unless\n" +
 			"--allow-unauthenticated-listen says one is there, or an upstream token\n" +
 			"is set.\n\n" +
-			"--upstream-token, or " + upstreamTokenEnv + " in preference to it, makes focal\n" +
+			upstreamTokenEnv + " in the environment makes focal\n" +
 			"answer only requests carrying that token as Authorization: Bearer\n" +
 			"<token>. It is the shared secret for the hop from the proxy, not a\n" +
 			"login: it says nothing about who is calling, and it encrypts nothing.\n\n" +
@@ -167,9 +163,6 @@ func newServeCommand(a *app) *cobra.Command {
 		"address to listen on, as host:port, or as "+exampleUnixListenAddress+" for a Unix domain socket")
 	flags.BoolVar(&o.allowUnauthenticated, "allow-unauthenticated-listen", false,
 		"permit binding an address other than loopback, where focal is reachable without authentication")
-	flags.StringVar(&o.upstreamToken, "upstream-token", "",
-		"shared secret every request must carry as Authorization: Bearer <token>; "+
-			upstreamTokenEnv+" sets the same thing without putting it in the process list")
 	flags.StringArrayVar(&o.identities, "identity", nil,
 		"register a private key as alias=path, repeatable; a tool call may name only the alias")
 	flags.StringVar(&o.user, "user", "", "default user to log in as, when a tool call and its host name none")
@@ -186,11 +179,15 @@ func newServeCommand(a *app) *cobra.Command {
 // so a misconfigured server never reaches a state where an agent could reach
 // it.
 func (a *app) serve(ctx context.Context, o serveOptions) *cliError {
-	handler, err := a.serveHandler(o)
+	// The token is resolved here, once: resolving it drops it from the
+	// environment, so the handler and the bind policy must be given the same
+	// value rather than each asking again.
+	token := upstreamToken()
+	handler, err := a.serveHandler(o, token)
 	if err != nil {
 		return err
 	}
-	ln, err := a.listen(o)
+	ln, err := a.listen(o, token)
 	if err != nil {
 		return err
 	}
@@ -206,7 +203,8 @@ type serveHandler struct {
 
 // serveHandler loads the configuration, registers the identity aliases and
 // builds the MCP handler over them, behind the token check when there is one.
-func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
+// token is the shared secret in force, as resolved by upstreamToken.
+func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliError) {
 	cfg, cfgErr := loadConfigFrom(o.config)
 	if cfgErr != nil {
 		return nil, rejected(cfgErr)
@@ -215,7 +213,7 @@ func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 	if idsErr != nil {
 		return nil, usageError(idsErr.Code, idsErr.Message, idsErr.Field, idsErr.Allowed)
 	}
-	auth, authErr := newUpstreamAuth(upstreamToken(o))
+	auth, authErr := newUpstreamAuth(token)
 	if authErr != nil {
 		return nil, usageError(authErr.Code, authErr.Message, authErr.Field, authErr.Allowed)
 	}
@@ -236,16 +234,6 @@ func (a *app) serveHandler(o serveOptions) (*serveHandler, *cliError) {
 	handler = limitInFlight(handler, serveMaxInFlight)
 	if auth != nil {
 		handler = auth.wrap(handler)
-		if o.upstreamToken != "" {
-			// The flag works, and focal takes it, but an argument
-			// is readable by every process on the machine for as
-			// long as focal runs. Saying so once at startup is the
-			// only thing focal can do about that.
-			fmt.Fprintf(a.stderr,
-				"focal serve: warning: --upstream-token puts the shared secret in this machine's\n"+
-					"process list, where any local process can read it. Set %s instead.\n",
-				upstreamTokenEnv)
-		}
 	}
 	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor}, nil
 }
@@ -273,8 +261,9 @@ func limitInFlight(next http.Handler, n int) http.Handler {
 	})
 }
 
-// listen applies focal's bind policy and returns the bound listener.
-func (a *app) listen(o serveOptions) (net.Listener, *cliError) {
+// listen applies focal's bind policy and returns the bound listener. token is
+// the shared secret in force, as resolved by upstreamToken.
+func (a *app) listen(o serveOptions, token string) (net.Listener, *cliError) {
 	if path, ok := strings.CutPrefix(o.listen, unixListenScheme); ok {
 		return a.listenUnix(path)
 	}
@@ -282,10 +271,13 @@ func (a *app) listen(o serveOptions) (net.Listener, *cliError) {
 	if addrErr != nil {
 		return nil, usageError(addrErr.Code, addrErr.Message, addrErr.Field, addrErr.Allowed)
 	}
-	if !loopback {
-		if err := a.allowBeyondLoopback(o); err != nil {
+	switch {
+	case !loopback:
+		if err := a.allowBeyondLoopback(o, token); err != nil {
 			return nil, err
 		}
+	case token == "":
+		a.warnLoopbackOpenToLocalCallers(o.listen)
 	}
 	ln, err := net.Listen("tcp", o.listen)
 	if err != nil {
@@ -305,9 +297,9 @@ func (a *app) listen(o serveOptions) (net.Listener, *cliError) {
 // means the operator says something in front of focal is doing the refusing,
 // which focal cannot verify and so states as the assumption it is. Neither
 // case is silent, because in neither case is there nothing left to say.
-func (a *app) allowBeyondLoopback(o serveOptions) *cliError {
+func (a *app) allowBeyondLoopback(o serveOptions, token string) *cliError {
 	switch {
-	case upstreamToken(o) != "":
+	case token != "":
 		fmt.Fprintf(a.stderr,
 			"focal serve: warning: listening on %s, which is reachable from beyond this machine.\n"+
 				"The upstream token is demanded of every request, but nothing here is encrypted: the\n"+
@@ -327,11 +319,25 @@ func (a *app) allowBeyondLoopback(o serveOptions) *cliError {
 			[]string{
 				"a loopback address such as " + defaultListenAddress,
 				"--allow-unauthenticated-listen",
-				"--upstream-token, or " + upstreamTokenEnv,
+				upstreamTokenEnv,
 			},
 		)
 	}
 	return nil
+}
+
+// warnLoopbackOpenToLocalCallers says what a loopback bind with no token still
+// leaves open. Loopback keeps other hosts out; it does not tell one local
+// caller from another, so every user and process on this machine can reach the
+// address and inspect with the operator's SSH keys and AWS credentials. Binding
+// it stays allowed, because it is the default and the right answer on a machine
+// one person uses; the note is for the operator of a shared one.
+func (a *app) warnLoopbackOpenToLocalCallers(addr string) {
+	fmt.Fprintf(a.stderr,
+		"focal serve: warning: listening on %s with no upstream token. Any user and any process on this\n"+
+			"machine can connect to this address and run inspections with this operator's SSH keys and AWS\n"+
+			"credentials. On a shared host, set %s or listen on a %s socket (mode 0600) instead.\n",
+		addr, upstreamTokenEnv, unixListenScheme)
 }
 
 // listenUnix binds the Unix domain socket at path.
@@ -348,13 +354,18 @@ func (a *app) allowBeyondLoopback(o serveOptions) *cliError {
 // Removing the socket afterwards is net.UnixListener's own: it unlinks the
 // path it created when it is closed, and http.Server.Shutdown closes it.
 func (a *app) listenUnix(path string) (net.Listener, *cliError) {
-	if err := checkUnixSocketPath(path); err != nil {
+	// Everything below works on the path the check resolved, not the one the
+	// operator typed: the check judged the directories that path really runs
+	// through, and a symlink on the typed path could be repointed afterwards
+	// to somewhere nothing was judged.
+	resolved, err := checkUnixSocketPath(path)
+	if err != nil {
 		return nil, usageError(err.Code, err.Message, err.Field, err.Allowed)
 	}
-	if err := clearStaleSocket(path); err != nil {
+	if err := clearStaleSocket(resolved); err != nil {
 		return nil, err
 	}
-	return listenUnixSocket(path)
+	return listenUnixSocket(resolved)
 }
 
 // invalidUnixSocketPath is one rejection of a --listen socket path. Every one
@@ -376,24 +387,37 @@ func invalidUnixSocketPath(format string, args ...any) *result.Error {
 // itself: a socket is only as private as the directory a stranger would have
 // to get past to replace it. A sticky directory such as /tmp passes, because
 // there only a file's owner may replace it.
-func checkUnixSocketPath(path string) *result.Error {
+//
+// It returns the path the judgement was made on: the directory with its
+// symlinks resolved, joined to the socket's own name. That is the path focal
+// must clear and bind, not the one it was given — a symlink in the given path
+// could be repointed after the check, and the socket would then be created in a
+// directory nothing here looked at.
+func checkUnixSocketPath(path string) (string, *result.Error) {
 	// A socket path is a POSIX path on every platform that has one, so it
 	// is judged as one rather than by the local filesystem's rules.
 	if !strings.HasPrefix(path, "/") {
-		return invalidUnixSocketPath("%q is not an absolute path", path)
+		return "", invalidUnixSocketPath("%q is not an absolute path", path)
 	}
 	if len(path) > maxUnixSocketPathLen {
-		return invalidUnixSocketPath(
+		return "", invalidUnixSocketPath(
 			"a socket path may be at most %d bytes, and %q is %d",
 			maxUnixSocketPathLen, path, len(path))
+	}
+	// The last component has to be one plain name inside the directory that is
+	// about to be checked. A trailing slash, "." or ".." would make the path
+	// mean a different directory than the one Dir returns.
+	name := filepath.Base(path)
+	if strings.HasSuffix(path, "/") || name == "." || name == ".." || name == "/" {
+		return "", invalidUnixSocketPath("%q does not name a socket file", path)
 	}
 	dir := filepath.Dir(path)
 	info, err := os.Stat(dir)
 	if err != nil {
-		return invalidUnixSocketPath("cannot use the directory %q: %s", dir, err.Error())
+		return "", invalidUnixSocketPath("cannot use the directory %q: %s", dir, err.Error())
 	}
 	if !info.IsDir() {
-		return invalidUnixSocketPath("%q is not a directory", dir)
+		return "", invalidUnixSocketPath("%q is not a directory", dir)
 	}
 	// Checking only the immediate parent is not enough: whoever can write to
 	// any directory on the way to it can rename that directory aside and put
@@ -408,27 +432,35 @@ func checkUnixSocketPath(path string) *result.Error {
 	// between here and the bind.
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return invalidUnixSocketPath("cannot use the directory %q: %s", dir, err.Error())
+		return "", invalidUnixSocketPath("cannot use the directory %q: %s", dir, err.Error())
+	}
+	// The resolved path is what gets bound, and resolving can lengthen it
+	// (/tmp is /private/tmp on macOS), so the limit applies to it as well.
+	socket := filepath.Join(resolved, name)
+	if len(socket) > maxUnixSocketPathLen {
+		return "", invalidUnixSocketPath(
+			"a socket path may be at most %d bytes, and %q, which %q resolves to, is %d",
+			maxUnixSocketPathLen, socket, path, len(socket))
 	}
 	for cur := resolved; ; cur = filepath.Dir(cur) {
 		info, err := os.Lstat(cur)
 		if err != nil {
-			return invalidUnixSocketPath("cannot use the directory %q: %s", cur, err.Error())
+			return "", invalidUnixSocketPath("cannot use the directory %q: %s", cur, err.Error())
 		}
 		if mode := info.Mode(); mode&os.ModeSticky == 0 && mode.Perm()&0o022 != 0 {
-			return invalidUnixSocketPath(
+			return "", invalidUnixSocketPath(
 				"%q can be written by users other than its owner, who could replace the socket in it", cur)
 		}
 		// A directory owned by someone else is theirs to replace whatever
 		// its mode says, so the mode alone does not settle it. root is
 		// accepted because every path starts under directories root owns.
 		if err := checkDirOwner(cur, info); err != nil {
-			return err
+			return "", err
 		}
 		if parent := filepath.Dir(cur); parent != cur {
 			continue
 		}
-		return nil
+		return socket, nil
 	}
 }
 

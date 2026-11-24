@@ -3,6 +3,7 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -26,27 +27,28 @@ func mustUpstreamAuth(t *testing.T, token string) *upstreamAuth {
 	return auth
 }
 
-// TestUpstreamTokenPrefersTheFlagOverTheEnvironment fixes the same layering
-// the connection options use: what the command line said wins, and the
-// environment fills in for a command line that said nothing.
-func TestUpstreamTokenPrefersTheFlagOverTheEnvironment(t *testing.T) {
+// TestUpstreamTokenIsReadFromTheEnvironmentAndDroppedFromIt fixes the one way
+// in the token has: the environment variable is read, and is gone from the
+// environment afterwards so the ssh(1) processes focal starts do not inherit
+// it.
+func TestUpstreamTokenIsReadFromTheEnvironmentAndDroppedFromIt(t *testing.T) {
 	tests := []struct {
 		name string
-		flag string
 		env  string
 		want string
 	}{
-		{"flag only", testToken, "", testToken},
-		{"environment only", "", testToken, testToken},
-		{"flag wins", testToken, "env-" + testToken, testToken},
-		{"neither", "", "", ""},
+		{"set", testToken, testToken},
+		{"unset", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(upstreamTokenEnv, tt.env)
 
-			if got := upstreamToken(serveOptions{upstreamToken: tt.flag}); got != tt.want {
+			if got := upstreamToken(); got != tt.want {
 				t.Errorf("upstreamToken = %q, want %q", got, tt.want)
+			}
+			if got, set := os.LookupEnv(upstreamTokenEnv); set || got != "" {
+				t.Errorf("%s is still in the environment after it was read", upstreamTokenEnv)
 			}
 		})
 	}
@@ -180,7 +182,7 @@ func TestUnauthorizedNeverReachesSSH(t *testing.T) {
 	t.Setenv(upstreamTokenEnv, "")
 	s := newServeApp(t)
 
-	handler, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", upstreamToken: testToken})
+	handler, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, testToken)
 	if err != nil {
 		t.Fatalf("serveHandler: %v", err.err)
 	}
@@ -221,7 +223,7 @@ func TestServeHandlerWithoutATokenNeedsNoHeader(t *testing.T) {
 	t.Setenv(upstreamTokenEnv, "")
 	s := newServeApp(t)
 
-	handler, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"})
+	handler, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, "")
 	if err != nil {
 		t.Fatalf("serveHandler: %v", err.err)
 	}
@@ -244,7 +246,7 @@ func TestAUnixSocketStillDemandsTheToken(t *testing.T) {
 	t.Setenv(upstreamTokenEnv, testToken)
 	s := newServeApp(t)
 
-	handler, err := s.app.serveHandler(serveOptions{listen: unixListenScheme + "/run/focal/focal.sock"})
+	handler, err := s.app.serveHandler(serveOptions{listen: unixListenScheme + "/run/focal/focal.sock"}, testToken)
 	if err != nil {
 		t.Fatalf("serveHandler: %v", err.err)
 	}
@@ -269,7 +271,7 @@ func TestServeHandlerRefusesAWeakTokenAtStartup(t *testing.T) {
 	s := newServeApp(t)
 
 	short := strings.Repeat("a", minUpstreamTokenLen-1)
-	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", upstreamToken: short})
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, short)
 	if err == nil {
 		t.Fatal("a token shorter than the minimum was accepted")
 	}
@@ -282,29 +284,6 @@ func TestServeHandlerRefusesAWeakTokenAtStartup(t *testing.T) {
 	assertNoToken(t, s.stderr.String()+err.err.Error(), short)
 }
 
-// TestTheTokenFlagAsksToBeAnEnvironmentVariableInstead is the one thing focal
-// can do about the flag's real weakness: an argument is visible to every
-// process on the machine, so focal accepts it and says so — without printing
-// the secret it is warning about.
-func TestTheTokenFlagAsksToBeAnEnvironmentVariableInstead(t *testing.T) {
-	withConfig(t, "")
-	t.Setenv(upstreamTokenEnv, "")
-	s := newServeApp(t)
-
-	if _, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", upstreamToken: testToken}); err != nil {
-		t.Fatalf("serveHandler: %v", err.err)
-	}
-
-	got := s.stderr.String()
-	if !strings.Contains(got, "warning") {
-		t.Errorf("stderr = %q, want a warning", got)
-	}
-	if !strings.Contains(got, upstreamTokenEnv) {
-		t.Errorf("stderr = %q, want it to name %s", got, upstreamTokenEnv)
-	}
-	assertNoToken(t, got, testToken)
-}
-
 // TestTheEnvironmentVariableNeedsNoWarning is the converse: a token that
 // arrived out of the environment is already where the warning would send it,
 // so there is nothing to say.
@@ -313,7 +292,7 @@ func TestTheEnvironmentVariableNeedsNoWarning(t *testing.T) {
 	t.Setenv(upstreamTokenEnv, testToken)
 	s := newServeApp(t)
 
-	if _, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}); err != nil {
+	if _, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, testToken); err != nil {
 		t.Fatalf("serveHandler: %v", err.err)
 	}
 

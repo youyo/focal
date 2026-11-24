@@ -77,25 +77,54 @@ func TestServeListenHelpOffersTheUnixSocketForm(t *testing.T) {
 	}
 }
 
-// TestServeOffersTheUpstreamTokenFlag keeps the second way to put a boundary
-// in front of focal discoverable from the help alone: the flag, the
-// environment variable it prefers, and the bind it now permits.
-func TestServeOffersTheUpstreamTokenFlag(t *testing.T) {
+// TestServeHasNoUpstreamTokenFlag pins that the shared secret has no
+// command-line spelling at all: an argument is visible to every process on the
+// machine for as long as focal runs, so the only way in is the environment.
+func TestServeHasNoUpstreamTokenFlag(t *testing.T) {
+	cmd := newServeCommand(newServeApp(t).app)
+	if cmd.Flags().Lookup("upstream-token") != nil {
+		t.Fatal("serve still has an --upstream-token flag")
+	}
+	if err := cmd.ParseFlags([]string{"--upstream-token", testToken}); err == nil {
+		t.Fatal("--upstream-token was accepted")
+	}
+}
+
+// TestServeRejectsTheUpstreamTokenFlagAsUnknown is the same property through
+// the whole command line: the flag is refused by the parser before focal does
+// anything with it, and the refusal does not repeat the value back.
+func TestServeRejectsTheUpstreamTokenFlagAsUnknown(t *testing.T) {
+	withConfig(t, "")
+	t.Setenv(upstreamTokenEnv, "")
+	s := newServeApp(t)
+
+	code := s.app.run([]string{"serve", "--upstream-token", testToken})
+
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want %d", code, exitUsage)
+	}
+	got := s.stderr.String()
+	if !strings.Contains(got, "unknown flag: --upstream-token") {
+		t.Errorf("stderr = %q, want cobra's unknown flag error", got)
+	}
+	assertNoToken(t, got, testToken)
+}
+
+// TestServeDescribesTheUpstreamTokenEnvironmentVariable keeps the way to put a
+// boundary in front of focal discoverable from the help alone: the environment
+// variable, and the bind it now permits.
+func TestServeDescribesTheUpstreamTokenEnvironmentVariable(t *testing.T) {
 	cmd := newServeCommand(newServeApp(t).app)
 
-	flag := cmd.Flags().Lookup("upstream-token")
-	if flag == nil {
-		t.Fatal("serve has no --upstream-token flag")
-	}
-	if !strings.Contains(flag.Usage, upstreamTokenEnv) {
-		t.Errorf("--upstream-token usage = %q, want it to name %s", flag.Usage, upstreamTokenEnv)
-	}
 	if !strings.Contains(cmd.Long, upstreamTokenEnv) {
 		t.Errorf("serve's description does not mention %s:\n%s", upstreamTokenEnv, cmd.Long)
 	}
+	if strings.Contains(cmd.Long, "--upstream-token") {
+		t.Errorf("serve's description still mentions the removed --upstream-token flag:\n%s", cmd.Long)
+	}
 	// The bind policy's second answer is only discoverable here: an
 	// operator who has a token has to learn that it is enough.
-	for _, want := range []string{"--upstream-token", "Bearer", "or an upstream token\nis set"} {
+	for _, want := range []string{"Bearer", "or an upstream token\nis set"} {
 		if !strings.Contains(cmd.Long, want) {
 			t.Errorf("serve's description does not mention %q:\n%s", want, cmd.Long)
 		}
@@ -113,6 +142,7 @@ func TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable(t *testing.T) {
 	tests := []struct {
 		name    string
 		options serveOptions
+		token   string
 		refused bool
 		want    []string
 		notWant []string
@@ -129,7 +159,8 @@ func TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable(t *testing.T) {
 		},
 		{
 			name:    "a token",
-			options: serveOptions{listen: "0.0.0.0:0", upstreamToken: testToken},
+			options: serveOptions{listen: "0.0.0.0:0"},
+			token:   testToken,
 			want:    []string{"warning", "TLS"},
 			notWant: []string{"authentication", testToken},
 		},
@@ -139,7 +170,7 @@ func TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable(t *testing.T) {
 			t.Setenv(upstreamTokenEnv, "")
 			s := newServeApp(t)
 
-			ln, err := s.app.listen(tt.options)
+			ln, err := s.app.listen(tt.options, tt.token)
 			if tt.refused {
 				if err == nil {
 					_ = ln.Close()
@@ -154,7 +185,7 @@ func TestListenBeyondLoopbackNeedsAnAnswerForBeingReachable(t *testing.T) {
 				// Both ways out are offered, so an operator reading the
 				// refusal learns the token exists.
 				joined := strings.Join(err.err.Allowed, "\n")
-				for _, want := range []string{"--allow-unauthenticated-listen", "--upstream-token"} {
+				for _, want := range []string{"--allow-unauthenticated-listen", upstreamTokenEnv} {
 					if !strings.Contains(joined, want) {
 						t.Errorf("allowed = %v, want it to name %s", err.err.Allowed, want)
 					}
@@ -188,7 +219,7 @@ func TestListenBeyondLoopbackAcceptsATokenFromTheEnvironment(t *testing.T) {
 	t.Setenv(upstreamTokenEnv, testToken)
 	s := newServeApp(t)
 
-	ln, err := s.app.listen(serveOptions{listen: "0.0.0.0:0"})
+	ln, err := s.app.listen(serveOptions{listen: "0.0.0.0:0"}, testToken)
 	if err != nil {
 		t.Fatalf("listen: %v", err.err)
 	}
@@ -242,17 +273,75 @@ func TestListenAddressMustBeHostPort(t *testing.T) {
 	}
 }
 
-func TestListenBindsLoopbackQuietly(t *testing.T) {
+// TestListenBindsLoopbackWithATokenQuietly pins that the loopback warning is
+// about a missing token and nothing else: with one, focal itself refuses the
+// callers that cannot name it, so there is nothing left to say.
+func TestListenBindsLoopbackWithATokenQuietly(t *testing.T) {
 	s := newServeApp(t)
 
-	ln, err := s.app.listen(serveOptions{listen: "127.0.0.1:0"})
+	ln, err := s.app.listen(serveOptions{listen: "127.0.0.1:0"}, testToken)
 	if err != nil {
 		t.Fatalf("listen: %v", err.err)
 	}
 	defer ln.Close()
 
-	if got := s.stderr.String(); got != "" {
-		t.Errorf("stderr = %q, want nothing for a loopback bind", got)
+	got := s.stderr.String()
+	if got != "" {
+		t.Errorf("stderr = %q, want nothing for a loopback bind that demands a token", got)
+	}
+	assertNoToken(t, got, testToken)
+}
+
+// TestListenWarnsThatLoopbackIsOpenToEveryLocalCaller pins what the loopback
+// default still leaves open. Binding 127.0.0.1 keeps other hosts out and does
+// nothing about the rest of this one: any user and any process here can
+// connect and run inspections with the operator's keys and credentials. Not
+// refusing it is deliberate (it is the default, and the sound answer on a
+// machine one person uses), so saying so at startup is what focal does.
+func TestListenWarnsThatLoopbackIsOpenToEveryLocalCaller(t *testing.T) {
+	for _, listen := range []string{"127.0.0.1:0", "[::1]:0"} {
+		t.Run(listen, func(t *testing.T) {
+			s := newServeApp(t)
+
+			ln, err := s.app.listen(serveOptions{listen: listen}, "")
+			if err != nil {
+				t.Skipf("listen %s: %v", listen, err.err)
+			}
+			defer ln.Close()
+
+			// Where the lines wrap is not what is being pinned.
+			got := strings.Join(strings.Fields(s.stderr.String()), " ")
+			for _, want := range []string{
+				"warning",
+				listen,
+				"Any user and any process",
+				"SSH keys and AWS credentials",
+				upstreamTokenEnv,
+				unixListenScheme,
+				"0600",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("stderr = %q, want it to mention %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestListenBeyondLoopbackDoesNotAddTheLoopbackWarning keeps the two warnings
+// apart: an address something off this machine can reach has its own, and
+// repeating a local-callers note there would only bury it.
+func TestListenBeyondLoopbackDoesNotAddTheLoopbackWarning(t *testing.T) {
+	s := newServeApp(t)
+
+	ln, err := s.app.listen(serveOptions{listen: "0.0.0.0:0", allowUnauthenticated: true}, "")
+	if err != nil {
+		t.Fatalf("listen: %v", err.err)
+	}
+	defer ln.Close()
+
+	if got := s.stderr.String(); strings.Contains(strings.Join(strings.Fields(got), " "), "Any user and any process") {
+		t.Errorf("stderr = %q, want only the beyond-loopback warning", got)
 	}
 }
 
@@ -260,7 +349,7 @@ func TestListenBindsLoopbackQuietly(t *testing.T) {
 // handler over the real runner — with a Recorder in place of ssh(1).
 func serveHost(t *testing.T, s *serveApp, o serveOptions) string {
 	t.Helper()
-	handler, err := s.app.serveHandler(o)
+	handler, err := s.app.serveHandler(o, upstreamToken())
 	if err != nil {
 		t.Fatalf("serveHandler: %v", err.err)
 	}
@@ -401,7 +490,7 @@ func TestServeConfigFlagRejectsAnUnreadablePath(t *testing.T) {
 	withConfig(t, "")
 	s := newServeApp(t)
 
-	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: t.TempDir()})
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: t.TempDir()}, "")
 	if err == nil {
 		t.Fatal("an unreadable --config path was accepted")
 	}
@@ -419,7 +508,7 @@ func TestServeConfigFlagRejectsAMissingPath(t *testing.T) {
 	s := newServeApp(t)
 
 	path := filepath.Join(t.TempDir(), "typo.yaml")
-	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path})
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path}, "")
 	if err == nil {
 		t.Fatal("a missing --config path was accepted")
 	}
@@ -438,7 +527,7 @@ func TestServeConfigFlagRejectsInvalidYAML(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path})
+	_, err := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0", config: path}, "")
 	if err == nil {
 		t.Fatal("an invalid --config file was accepted")
 	}
@@ -673,7 +762,7 @@ func TestServeRejectsAMisconfiguredIdentityAtStartup(t *testing.T) {
 	_, err := s.app.serveHandler(serveOptions{
 		listen:     "127.0.0.1:0",
 		identities: []string{"default=" + keyFile(t, dir, "id", 0o644)},
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("a world-readable key was registered")
 	}
@@ -687,11 +776,11 @@ func TestServeRejectsAMisconfiguredIdentityAtStartup(t *testing.T) {
 func TestServeOnStopsWithItsContext(t *testing.T) {
 	withConfig(t, "")
 	s := newServeApp(t)
-	handler, herr := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"})
+	handler, herr := s.app.serveHandler(serveOptions{listen: "127.0.0.1:0"}, "")
 	if herr != nil {
 		t.Fatalf("serveHandler: %v", herr.err)
 	}
-	ln, lerr := s.app.listen(serveOptions{listen: "127.0.0.1:0"})
+	ln, lerr := s.app.listen(serveOptions{listen: "127.0.0.1:0"}, "")
 	if lerr != nil {
 		t.Fatalf("listen: %v", lerr.err)
 	}
@@ -710,5 +799,83 @@ func TestServeOnStopsWithItsContext(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("serveOn returned %v after a clean shutdown", err.err)
+	}
+}
+
+// serveUntilCancelled runs a whole focal serve invocation with a context that
+// has already ended, so everything up to and including the bind happens and the
+// server then stops at once.
+func serveUntilCancelled(s *serveApp, o serveOptions) *cliError {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return s.app.serve(ctx, o)
+}
+
+// TestServeStartsOnABeyondLoopbackAddressWithATokenFromTheEnvironment pins that
+// the token is resolved once for the whole invocation. The environment is read
+// and then cleared, so a second read — one for the handler and another for the
+// bind policy — would find nothing and refuse an operator who did exactly what
+// focal asked of them.
+func TestServeStartsOnABeyondLoopbackAddressWithATokenFromTheEnvironment(t *testing.T) {
+	withConfig(t, "")
+	t.Setenv(upstreamTokenEnv, testToken)
+	s := newServeApp(t)
+
+	if err := serveUntilCancelled(s, serveOptions{listen: "0.0.0.0:0"}); err != nil {
+		t.Fatalf("serve: %v", err.err)
+	}
+
+	got := s.stderr.String()
+	if !strings.Contains(got, "warning") || !strings.Contains(got, "TLS") {
+		t.Errorf("stderr = %q, want the warning that the token travels in the clear", got)
+	}
+	assertNoToken(t, got, testToken)
+}
+
+// TestServeWarnsOnLoopbackOnlyWithoutAToken is the same policy seen through
+// the whole of focal serve: the token resolved once for the invocation decides
+// whether the loopback note is written, and the token never is.
+func TestServeWarnsOnLoopbackOnlyWithoutAToken(t *testing.T) {
+	t.Run("no token", func(t *testing.T) {
+		withConfig(t, "")
+		s := newServeApp(t)
+
+		if err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"}); err != nil {
+			t.Fatalf("serve: %v", err.err)
+		}
+		if got := strings.Join(strings.Fields(s.stderr.String()), " "); !strings.Contains(got, "Any user and any process") {
+			t.Errorf("stderr = %q, want the warning that every local caller can connect", got)
+		}
+	})
+	t.Run("token from the environment", func(t *testing.T) {
+		withConfig(t, "")
+		t.Setenv(upstreamTokenEnv, testToken)
+		s := newServeApp(t)
+
+		if err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"}); err != nil {
+			t.Fatalf("serve: %v", err.err)
+		}
+		got := s.stderr.String()
+		if strings.Contains(got, "warning") {
+			t.Errorf("stderr = %q, want no warning when a token is demanded", got)
+		}
+		assertNoToken(t, got, testToken)
+	})
+}
+
+// TestServeDropsTheTokenFromTheEnvironment pins that the variable does not
+// survive into the ssh(1) processes focal starts, which inherit this process's
+// environment.
+func TestServeDropsTheTokenFromTheEnvironment(t *testing.T) {
+	withConfig(t, "")
+	t.Setenv(upstreamTokenEnv, testToken)
+	s := newServeApp(t)
+
+	if err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"}); err != nil {
+		t.Fatalf("serve: %v", err.err)
+	}
+
+	if got, set := os.LookupEnv(upstreamTokenEnv); set || got != "" {
+		t.Errorf("%s is still in the environment after serve started", upstreamTokenEnv)
 	}
 }
