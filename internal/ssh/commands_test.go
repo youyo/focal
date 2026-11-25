@@ -51,10 +51,10 @@ func factoryCases(t *testing.T) []factoryCase {
 		{"IPRouteCommand", must(IPRouteCommand(p)), "ip", []string{"route", "show"}},
 		{"SocketStatsCommand", must(SocketStatsCommand(p)), "ss", []string{"-lntup"}},
 		{"ResolvConfCommand", must(ResolvConfCommand(p)), "cat", []string{"/etc/resolv.conf"}},
-		{"ProcessListCommand", must(ProcessListCommand(p)), "ps", []string{"-eo", "pid,ppid,user,state,%cpu,%mem,etime,comm,args"}},
+		{"ProcessListCommand", must(ProcessListCommand(p)), "ps", []string{"-eo", "pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args"}},
 		{"ServiceStatusCommand", must(ServiceStatusCommand(p, unit)), "systemctl", []string{
 			"show", "nginx.service", "--no-pager",
-			"--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result",
+			"--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent",
 		}},
 		{"LogsCommand", must(LogsCommand(p, unit, since, lines)), "journalctl", []string{
 			"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso",

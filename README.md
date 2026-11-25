@@ -26,8 +26,8 @@ but not touch.**
 | `memory` | `free -b` / `cat /proc/meminfo` | never | なし |
 | `storage` | `df -PT` / `lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS` / `findmnt` | never | なし |
 | `network` | `ip -details addr show` / `ip route show` / `ss -lntup` / `cat /etc/resolv.conf` | never | なし |
-| `processes` | `ps -eo pid,ppid,user,state,%cpu,%mem,etime,comm,args`（フィルタは remote に渡さず Focal 側でローカルに適用） | never | `--name`, `--pid` |
-| `service` | `systemctl show UNIT --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result` | never | `SERVICE`（例: `nginx` → `nginx.service` に正規化） |
+| `processes` | `ps -eo pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args`（フィルタは remote に渡さず Focal 側でローカルに適用） | never | `--name`, `--pid` |
+| `service` | `systemctl show UNIT --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent` | never | `SERVICE`（例: `nginx` → `nginx.service` に正規化） |
 | `logs` | `journalctl -u UNIT --since=-DURATION -n LINES --no-pager --output=short-iso` | auto（`never` へ変更可） | `SERVICE`, `--since`（既定 `30m`）, `--lines`（既定 `200`） |
 | `kernel` | `journalctl -k --since=-DURATION -n LINES --no-pager --output=short-iso` | auto（`never` へ変更可）。**既定 disabled** | `--since`（既定 `1h`）, `--lines`（既定 `200`） |
 | `inspect` | remote command なし。`system` / `cpu` / `memory` / `storage` / `network` / `processes` を最大3並列で実行し結果を合成する composite operation | never | なし |

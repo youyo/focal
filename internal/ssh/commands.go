@@ -125,7 +125,7 @@ func ResolvConfCommand(p policy.Policy) (Command, *result.Error) {
 // process by name or pid gets the full list here and Focal narrows it locally,
 // so no part of a filter expression is ever composed into a remote argv.
 func ProcessListCommand(p policy.Policy) (Command, *result.Error) {
-	return newCommand(p, "ps", lit("-eo"), lit("pid,ppid,user,state,%cpu,%mem,etime,comm,args"))
+	return newCommand(p, "ps", lit("-eo"), lit("pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args"))
 }
 
 // ServiceStatusCommand builds systemctl show for one unit, restricted to the
@@ -142,7 +142,7 @@ func ServiceStatusCommand(p policy.Policy, unit vo.ServiceName) (Command, *resul
 		lit("show"),
 		val(unit.String()),
 		lit("--no-pager"),
-		lit("--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result"),
+		lit("--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent"),
 	)
 }
 

@@ -93,6 +93,10 @@ var serviceProperties = map[string]bool{
 	"MainPID":        true,
 	"ExecMainStatus": true,
 	"Result":         true,
+	"TasksCurrent":   true,
+	"TasksMax":       true,
+	"NRestarts":      true,
+	"MemoryCurrent":  true,
 }
 
 // serviceParse turns systemctl show output into the requested properties. It
