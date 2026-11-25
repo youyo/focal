@@ -61,7 +61,7 @@ func TestKernelGoldenArgvWithDefaults(t *testing.T) {
 	if program != "journalctl" {
 		t.Errorf("Program() = %q, want journalctl", program)
 	}
-	want := []string{"-k", "--since=-1h", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-k", "--since=-1h", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -80,7 +80,7 @@ func TestKernelGoldenArgvWithExplicitSinceAndLines(t *testing.T) {
 	rec, _ := journalTestRun(t, kernel, journalTestPolicy(t, "kernel", policy.SudoNever), ssh.Output{}, nil)
 
 	_, args := journalTestArgv(t, rec)
-	want := []string{"-k", "--since=-2h", "-n", "500", "--no-pager", "--output=short-iso"}
+	want := []string{"-k", "--since=-2h", "-n", "500", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -102,7 +102,7 @@ func TestKernelDefaultsClampedToCeilings(t *testing.T) {
 	rec, _ := journalTestRun(t, kernel, journalTestPolicy(t, "kernel", policy.SudoNever), ssh.Output{}, nil)
 
 	_, args := journalTestArgv(t, rec)
-	want := []string{"-k", "--since=-10m", "-n", "25", "--no-pager", "--output=short-iso"}
+	want := []string{"-k", "--since=-10m", "-n", "25", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -201,6 +201,43 @@ func TestKernelEnvelope(t *testing.T) {
 	if len(env.Parts) != 0 {
 		t.Errorf("Parts = %v, want empty: kernel runs a single command", env.Parts)
 	}
+}
+
+// TestKernelReturnsEntriesOldestFirst pins that kernel puts journalctl
+// --reverse's newest-first answer back oldest first by the same rule logs
+// uses, and drops the oldest entry when the answer was cut off.
+func TestKernelReturnsEntriesOldestFirst(t *testing.T) {
+	kernel, err := NewKernel(vo.Duration{}, vo.LineLimit{}, journalTestMaxSince(t), journalTestMaxLines(t))
+	if err != nil {
+		t.Fatalf("NewKernel() = %v", err)
+	}
+
+	t.Run("complete", func(t *testing.T) {
+		out := ssh.Output{Stdout: journalTestNewestFirst, ExitCode: 0}
+		_, env := journalTestRun(t, kernel, journalTestPolicy(t, "kernel", policy.SudoNever), out, nil)
+		if env.Stdout != journalTestOldestFirst {
+			t.Errorf("Stdout = %q, want %q", env.Stdout, journalTestOldestFirst)
+		}
+	})
+
+	t.Run("truncated", func(t *testing.T) {
+		out := ssh.Output{Stdout: journalTestNewestFirst, ExitCode: -1, Truncated: true}
+		_, env := journalTestRun(t, kernel, journalTestPolicy(t, "kernel", policy.SudoNever), out, nil)
+		want := "2026-11-25T13:04:06+0900 web01 app[2]: multi first\n" +
+			"                                       multi second\n" +
+			"2026-11-25T13:04:07+0900 web01 app[2]: newest\n"
+		if env.Stdout != want {
+			t.Errorf("Stdout = %q, want %q", env.Stdout, want)
+		}
+	})
+
+	t.Run("no entries", func(t *testing.T) {
+		out := ssh.Output{Stdout: "-- No entries --\n", ExitCode: 0}
+		_, env := journalTestRun(t, kernel, journalTestPolicy(t, "kernel", policy.SudoNever), out, nil)
+		if env.Stdout != out.Stdout {
+			t.Errorf("Stdout = %q, want %q", env.Stdout, out.Stdout)
+		}
+	})
 }
 
 // TestKernelEnvelopeKeepsTruncationVisible pins that a cut-off journal read is

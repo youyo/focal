@@ -67,7 +67,7 @@
 'systemctl' 'show' 'nginx.service' '--no-pager' '--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent'
 
 # LogsCommand
-'journalctl' '-u' 'nginx.service' '--since=-30m' '-n' '200' '--no-pager' '--output=short-iso'
+'journalctl' '-u' 'nginx.service' '--since=-30m' '-n' '200' '--reverse' '--no-pager' '--output=short-iso'
 
 # KernelLogsCommand
-'journalctl' '-k' '--since=-1h' '-n' '200' '--no-pager' '--output=short-iso'
+'journalctl' '-k' '--since=-1h' '-n' '200' '--reverse' '--no-pager' '--output=short-iso'

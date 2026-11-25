@@ -145,7 +145,7 @@ func TestLogsGoldenArgvWithDefaults(t *testing.T) {
 	if program != "journalctl" {
 		t.Errorf("Program() = %q, want journalctl", program)
 	}
-	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -165,7 +165,7 @@ func TestLogsGoldenArgvWithExplicitSinceAndLines(t *testing.T) {
 	rec, _ := journalTestRun(t, logs, journalTestPolicy(t, "logs", policy.SudoNever), ssh.Output{}, nil)
 
 	_, args := journalTestArgv(t, rec)
-	want := []string{"-u", "nginx.service", "--since=-15m", "-n", "50", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-15m", "-n", "50", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -220,7 +220,7 @@ func TestLogsDefaultsClampedToCeilings(t *testing.T) {
 	rec, _ := journalTestRun(t, logs, journalTestPolicy(t, "logs", policy.SudoNever), ssh.Output{}, nil)
 
 	_, args := journalTestArgv(t, rec)
-	want := []string{"-u", "nginx.service", "--since=-5m", "-n", "20", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-5m", "-n", "20", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -314,7 +314,7 @@ func TestLogsNoCeilingLeavesTheDefaultsAlone(t *testing.T) {
 	rec, _ := journalTestRun(t, logs, journalTestPolicy(t, "logs", policy.SudoNever), ssh.Output{}, nil)
 
 	_, args := journalTestArgv(t, rec)
-	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("Args() = %q, want %q", args, want)
 	}
@@ -431,6 +431,70 @@ func TestLogsEnvelope(t *testing.T) {
 	}
 	if len(env.Parts) != 0 {
 		t.Errorf("Parts = %v, want empty: logs runs a single command", env.Parts)
+	}
+}
+
+// journalTestNewestFirst is what journalctl --reverse hands back: the newest
+// entry first, a multi-line entry in the middle. journalTestOldestFirst is the
+// same entries in the order Focal returns them.
+const (
+	journalTestNewestFirst = "2026-11-25T13:04:07+0900 web01 app[2]: newest\n" +
+		"2026-11-25T13:04:06+0900 web01 app[2]: multi first\n" +
+		"                                       multi second\n" +
+		"2026-11-25T13:04:05+0900 web01 app[2]: oldest\n"
+	journalTestOldestFirst = "2026-11-25T13:04:05+0900 web01 app[2]: oldest\n" +
+		"2026-11-25T13:04:06+0900 web01 app[2]: multi first\n" +
+		"                                       multi second\n" +
+		"2026-11-25T13:04:07+0900 web01 app[2]: newest\n"
+)
+
+// TestLogsReturnsEntriesOldestFirst pins that the newest-first answer of
+// journalctl --reverse reaches the caller oldest first, entry by entry, with
+// stderr left exactly as the remote side wrote it.
+func TestLogsReturnsEntriesOldestFirst(t *testing.T) {
+	logs, err := NewLogs(journalTestService(t, "app"), vo.Duration{}, vo.LineLimit{}, journalTestMaxSince(t), journalTestMaxLines(t))
+	if err != nil {
+		t.Fatalf("NewLogs() = %v", err)
+	}
+	out := ssh.Output{Stdout: journalTestNewestFirst, Stderr: "Hint: kept as is\n", ExitCode: 0}
+
+	_, env := journalTestRun(t, logs, journalTestPolicy(t, "logs", policy.SudoNever), out, nil)
+
+	if env.Status != result.StatusOK {
+		t.Errorf("Status = %q, want ok", env.Status)
+	}
+	if env.Stdout != journalTestOldestFirst {
+		t.Errorf("Stdout = %q, want %q", env.Stdout, journalTestOldestFirst)
+	}
+	if env.Stderr != out.Stderr {
+		t.Errorf("Stderr = %q, want %q", env.Stderr, out.Stderr)
+	}
+}
+
+// TestLogsTruncatedDropsTheOldestEntry pins that a cut-off answer loses its
+// last entry — the oldest, and the one the cut may have gone through — before
+// it is put oldest first, and is still reported as truncated.
+func TestLogsTruncatedDropsTheOldestEntry(t *testing.T) {
+	logs, err := NewLogs(journalTestService(t, "app"), vo.Duration{}, vo.LineLimit{}, journalTestMaxSince(t), journalTestMaxLines(t))
+	if err != nil {
+		t.Fatalf("NewLogs() = %v", err)
+	}
+	out := ssh.Output{
+		Stdout: "2026-11-25T13:04:07+0900 web01 app[2]: newest\n" +
+			"2026-11-25T13:04:06+0900 web01 app[2]: multi first\n" +
+			"                                       multi sec",
+		ExitCode:  -1,
+		Truncated: true,
+	}
+
+	_, env := journalTestRun(t, logs, journalTestPolicy(t, "logs", policy.SudoNever), out, nil)
+
+	if env.Status != result.StatusTruncated || !env.Truncated {
+		t.Errorf("Status = %q, Truncated = %v, want truncated and true", env.Status, env.Truncated)
+	}
+	want := "2026-11-25T13:04:07+0900 web01 app[2]: newest\n"
+	if env.Stdout != want {
+		t.Errorf("Stdout = %q, want %q", env.Stdout, want)
 	}
 }
 
