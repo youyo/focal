@@ -1,8 +1,9 @@
 # The sshd container the E2E suite inspects. It is an ordinary Ubuntu host with
 # an OpenSSH server and the small set of tools focal's operations shell out to
-# (procps, iproute2, util-linux). There is deliberately no systemd here, so the
-# service and logs operations report a failed inspection rather than data — the
-# suite asserts exactly that.
+# (procps, iproute2, util-linux). This ubuntu container deliberately has no
+# systemd, so here the service and logs operations report a failed inspection
+# rather than data — the suite asserts exactly that. Checks that need systemd
+# run against the separate AL2023 container in test/e2e/systemd instead.
 FROM ubuntu:24.04
 
 # The e2e user's authorized key. It is passed in rather than baked as a file so

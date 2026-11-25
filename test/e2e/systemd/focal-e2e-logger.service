@@ -1,0 +1,12 @@
+[Unit]
+Description=focal E2E fixture that writes known journal entries
+Before=multi-user.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/libexec/focal-e2e-logger
+StandardOutput=journal
+SyslogIdentifier=focal-e2e-logger
+
+[Install]
+WantedBy=multi-user.target

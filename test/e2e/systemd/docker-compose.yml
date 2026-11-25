@@ -1,0 +1,31 @@
+# The Amazon Linux 2023 + systemd fixture for the E2E suite. It is a compose
+# file and project of its own, separate from test/e2e/docker-compose.yml, so a
+# host where this container cannot boot fails only the tests that use it and
+# never the ubuntu ones. The harness drives it the same way as the ubuntu
+# fixture: a per-run project name, the generated public key in
+# FOCAL_E2E_PUBKEY, and an ephemeral loopback host port read back afterwards.
+#
+# systemd as PID 1 runs here without --privileged and without added
+# capabilities. What it needs from the runtime:
+#   - a private cgroup namespace whose cgroup2 mount is writable
+#     (writable-cgroups, Docker 28 or later), so systemd can build its own
+#     subtree below the container's cgroup and nothing above it;
+#   - tmpfs on /run, /run/lock and /tmp, which systemd expects to be fresh;
+#   - a tty, so its boot messages reach `docker compose logs` when it fails.
+services:
+  al2023:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PUBKEY: ${FOCAL_E2E_PUBKEY:?FOCAL_E2E_PUBKEY must be set by the harness}
+    ports:
+      - "127.0.0.1::22"
+    cgroup: private
+    security_opt:
+      - writable-cgroups=true
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    tty: true

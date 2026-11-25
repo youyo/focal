@@ -1,0 +1,33 @@
+#!/usr/bin/python3
+# The process behind focal-e2e-logger.service. It writes a fixed set of journal
+# entries once at start and then stays up, so the unit reads as active/running
+# and every entry it wrote stays attributed to it.
+#
+# The marker lines go out on stdout, which the unit hands to journald, so each
+# line becomes one entry. The multi-line message goes through the native
+# journal protocol in a single datagram, which is the only way to get one entry
+# whose MESSAGE contains newlines: a stdout stream splits it at every newline.
+#
+# READY=1 is sent only after all of that, and the unit is Type=notify and
+# ordered before multi-user.target, so a container that reports itself booted
+# already holds every entry the E2E suite looks for.
+import signal
+import sys
+
+from systemd import daemon, journal
+
+for n in range(1, 4):
+    print(f"focal-e2e-logger: marker line {n} of 3", flush=True)
+
+journal.send(
+    "focal-e2e-logger: multiline entry first line\n"
+    "multiline entry second line\n"
+    "multiline entry third line",
+    SYSLOG_IDENTIFIER="focal-e2e-logger",
+)
+
+daemon.notify("READY=1")
+sys.stdout.flush()
+
+while True:
+    signal.pause()
