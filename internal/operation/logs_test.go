@@ -121,6 +121,12 @@ func TestLogsHoldsOnlyTypedParameters(t *testing.T) {
 		{"service", reflect.TypeOf(vo.ServiceName{})},
 		{"since", reflect.TypeOf(vo.Duration{})},
 		{"lines", reflect.TypeOf(vo.LineLimit{})},
+		{"until", reflect.TypeOf(vo.Duration{})},
+		{"sinceAt", reflect.TypeOf(vo.Timestamp{})},
+		{"untilAt", reflect.TypeOf(vo.Timestamp{})},
+		{"grep", reflect.TypeOf(vo.LogPattern{})},
+		{"grepRegex", reflect.TypeOf(vo.LogRegex{})},
+		{"countBy", reflect.TypeOf(vo.CountBy{})},
 	}
 	if ty.NumField() != len(want) {
 		t.Fatalf("Logs has %d fields, want %d (only typed parameters, no Command)", ty.NumField(), len(want))

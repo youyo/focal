@@ -190,6 +190,68 @@ func LogsCommand(p policy.Policy, unit vo.ServiceName, since vo.Duration, lines 
 	)
 }
 
+// The three factories below are the other shapes a logs read takes once a
+// request names an end to its window or an absolute instant (ADR 0011). They
+// differ from LogsCommand only in the window options; the unit, -n and the
+// output options are the same tokens in the same places. There is no form that
+// mixes a relative bound with an absolute one: when either bound is absolute,
+// internal/operation turns both into instants on Focal's clock first.
+//
+// What a caller filters or counts entries by never appears here. journalctl's
+// own --grep is not used: the entries are matched by Focal after they are read,
+// so the text cannot become part of an argv however it is spelled.
+
+// LogsRelativeWindowCommand bounds both ends of the window relative to the
+// remote clock: --since=-<span> --until=-<span>, the until span being the
+// nearer one. The "-" is part of each literal, as in LogsCommand.
+func LogsRelativeWindowCommand(p policy.Policy, unit vo.ServiceName, since, until vo.Duration, lines vo.LineLimit) (Command, *result.Error) {
+	return newCommand(p, "journalctl",
+		lit("-u"),
+		val(unit.String()),
+		prefixed("--since=-", since.String()),
+		prefixed("--until=-", until.String()),
+		lit("-n"),
+		val(lines.String()),
+		lit("--reverse"),
+		lit("--no-pager"),
+		lit("--output=short-iso"),
+	)
+}
+
+// LogsSinceEpochCommand starts the window at an absolute instant and leaves
+// its end open: --since=@<seconds since the epoch>. The value half is
+// vo.Timestamp's Epoch, which is decimal digits and nothing else, and the
+// empty string for a Timestamp that never went through internal/vo — which
+// argSpec refuses, so "--since=@" alone cannot be built.
+func LogsSinceEpochCommand(p policy.Policy, unit vo.ServiceName, since vo.Timestamp, lines vo.LineLimit) (Command, *result.Error) {
+	return newCommand(p, "journalctl",
+		lit("-u"),
+		val(unit.String()),
+		prefixed("--since=@", since.Epoch()),
+		lit("-n"),
+		val(lines.String()),
+		lit("--reverse"),
+		lit("--no-pager"),
+		lit("--output=short-iso"),
+	)
+}
+
+// LogsEpochWindowCommand bounds both ends of the window at absolute instants:
+// --since=@<seconds> --until=@<seconds>.
+func LogsEpochWindowCommand(p policy.Policy, unit vo.ServiceName, since, until vo.Timestamp, lines vo.LineLimit) (Command, *result.Error) {
+	return newCommand(p, "journalctl",
+		lit("-u"),
+		val(unit.String()),
+		prefixed("--since=@", since.Epoch()),
+		prefixed("--until=@", until.Epoch()),
+		lit("-n"),
+		val(lines.String()),
+		lit("--reverse"),
+		lit("--no-pager"),
+		lit("--output=short-iso"),
+	)
+}
+
 // KernelLogsCommand builds journalctl -k: the kernel ring buffer as the
 // journal holds it. It is the same shape as LogsCommand without a unit, since
 // -k selects the messages instead, and it takes --reverse for the same reason.

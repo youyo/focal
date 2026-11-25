@@ -120,6 +120,15 @@ func mustLineLimitForSecurityTest(t *testing.T, s string) vo.LineLimit {
 	return v
 }
 
+func mustTimestampForSecurityTest(t *testing.T, s string) vo.Timestamp {
+	t.Helper()
+	v, err := vo.ParseTimestamp(s)
+	if err != nil {
+		t.Fatalf("vo.ParseTimestamp(%q): %v", s, err)
+	}
+	return v
+}
+
 // buildOrFail returns a closure so a factory's two-valued call can be passed
 // straight through as its sole argument (must(ssh.UptimeCommand(p))), the way
 // internal/ssh/commands_test.go's own commandBuilder does.
@@ -147,6 +156,11 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 	since := mustDurationForSecurityTest(t, "30m")
 	kernelSince := mustDurationForSecurityTest(t, "1h")
 	lines := mustLineLimitForSecurityTest(t, "200")
+	windowSince := mustDurationForSecurityTest(t, "150m")
+	windowUntil := mustDurationForSecurityTest(t, "2h")
+	scan := mustLineLimitForSecurityTest(t, "100000")
+	from := mustTimestampForSecurityTest(t, "2026-11-20T09:00:00+09:00")
+	to := mustTimestampForSecurityTest(t, "2026-11-21T09:00:00+09:00")
 
 	return []securityFactoryCall{
 		{"UptimeCommand", func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.UptimeCommand(p)) }, nil},
@@ -184,6 +198,23 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 		{
 			"LogsCommand",
 			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.LogsCommand(p, unit, since, lines)) },
+			[]string{"nginx.service", "200"},
+		},
+		{
+			"LogsRelativeWindowCommand",
+			func(t *testing.T) ssh.Command {
+				return buildOrFail(t)(ssh.LogsRelativeWindowCommand(p, unit, windowSince, windowUntil, scan))
+			},
+			[]string{"nginx.service", "100000"},
+		},
+		{
+			"LogsSinceEpochCommand",
+			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.LogsSinceEpochCommand(p, unit, from, scan)) },
+			[]string{"nginx.service", "100000"},
+		},
+		{
+			"LogsEpochWindowCommand",
+			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.LogsEpochWindowCommand(p, unit, from, to, lines)) },
 			[]string{"nginx.service", "200"},
 		},
 		{

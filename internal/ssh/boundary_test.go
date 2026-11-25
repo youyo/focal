@@ -39,6 +39,9 @@ var allowedCommandFactories = []string{
 	"RPMQueryCommand",
 	"DpkgStatusCommand",
 	"LogsCommand",
+	"LogsRelativeWindowCommand",
+	"LogsSinceEpochCommand",
+	"LogsEpochWindowCommand",
 	"KernelLogsCommand",
 }
 
@@ -222,6 +225,30 @@ func TestExportedFactoryParametersAreTypedValues(t *testing.T) {
 			}
 			t.Errorf("exported factory %s takes a %s: a factory parameter must be policy.Policy or a value object from internal/vo, so that nothing reaches an argv without having been parsed",
 				fn.Name.Name, rendered)
+		}
+	}
+}
+
+// filterOnlyValueObjects are the value objects that hold what a caller filters
+// or counts journal entries by. Focal applies them to the output it reads
+// back; they are the one kind of caller input that may carry spaces and shell
+// metacharacters, which is safe only because no argv ever holds them.
+var filterOnlyValueObjects = []string{"vo.LogPattern", "vo.LogRegex", "vo.CountBy"}
+
+// TestNoFactoryTakesAFilterValue keeps the filtering half of logs on Focal's
+// side of the connection. TestExportedFactoryParametersAreTypedValues lets any
+// value object through, so a factory that took one of these would type-check
+// and pass it; this test is what says it must not exist.
+func TestNoFactoryTakesAFilterValue(t *testing.T) {
+	for _, fn := range funcDecls(packageFiles(t)) {
+		for _, p := range fn.Type.Params.List {
+			rendered := types.ExprString(p.Type)
+			for _, banned := range filterOnlyValueObjects {
+				if strings.Contains(rendered, banned) {
+					t.Errorf("%s takes a %s: text a caller filters journal entries by is matched by Focal and must never reach a remote argv",
+						fn.Name.Name, rendered)
+				}
+			}
 		}
 	}
 }

@@ -34,6 +34,11 @@ func factoryCases(t *testing.T) []factoryCase {
 	kernelSince := mustDuration(t, "1h")
 	lines := mustLineLimit(t, "200")
 	pkg := mustPackageName(t, "libstdc++6")
+	windowSince := mustDuration(t, "150m")
+	windowUntil := mustDuration(t, "2h")
+	scan := mustLineLimit(t, "100000")
+	from := mustTimestamp(t, "2026-11-20T09:00:00+09:00")
+	to := mustTimestamp(t, "2026-11-21T09:00:00+09:00")
 
 	return []factoryCase{
 		{"UptimeCommand", must(UptimeCommand(p)), "uptime", nil},
@@ -61,6 +66,15 @@ func factoryCases(t *testing.T) []factoryCase {
 		{"DpkgStatusCommand", must(DpkgStatusCommand(p, pkg)), "dpkg-query", []string{"-s", "libstdc++6"}},
 		{"LogsCommand", must(LogsCommand(p, unit, since, lines)), "journalctl", []string{
 			"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
+		}},
+		{"LogsRelativeWindowCommand", must(LogsRelativeWindowCommand(p, unit, windowSince, windowUntil, scan)), "journalctl", []string{
+			"-u", "nginx.service", "--since=-150m", "--until=-2h", "-n", "100000", "--reverse", "--no-pager", "--output=short-iso",
+		}},
+		{"LogsSinceEpochCommand", must(LogsSinceEpochCommand(p, unit, from, scan)), "journalctl", []string{
+			"-u", "nginx.service", "--since=@1795132800", "-n", "100000", "--reverse", "--no-pager", "--output=short-iso",
+		}},
+		{"LogsEpochWindowCommand", must(LogsEpochWindowCommand(p, unit, from, to, lines)), "journalctl", []string{
+			"-u", "nginx.service", "--since=@1795132800", "--until=@1795219200", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
 		}},
 		{"KernelLogsCommand", must(KernelLogsCommand(p, kernelSince, lines)), "journalctl", []string{
 			"-k", "--since=-1h", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
@@ -157,6 +171,7 @@ func TestFactoryArgvCarriesNoShellSyntax(t *testing.T) {
 		"30m":           true,
 		"1h":            true,
 		"200":           true,
+		"100000":        true,
 	}
 	for _, tc := range factoryCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,4 +237,31 @@ func mustLineLimit(t *testing.T, s string) vo.LineLimit {
 		t.Fatalf("vo.ParseLineLimit(%q): %v", s, err)
 	}
 	return l
+}
+
+func mustTimestamp(t *testing.T, s string) vo.Timestamp {
+	t.Helper()
+	ts, err := vo.ParseTimestamp(s)
+	if err != nil {
+		t.Fatalf("vo.ParseTimestamp(%q): %v", s, err)
+	}
+	return ts
+}
+
+// TestEpochFactoriesRefuseTheZeroTimestamp pins that an instant which never
+// went through internal/vo cannot become "--since=@" with nothing after it:
+// the zero Timestamp renders no digits, and an empty value is not a token.
+func TestEpochFactoriesRefuseTheZeroTimestamp(t *testing.T) {
+	unit := mustServiceName(t, "nginx.service")
+	lines := mustLineLimit(t, "200")
+	ts := mustTimestamp(t, "2026-11-20T09:00:00+09:00")
+	if _, err := LogsSinceEpochCommand(policy.Policy{}, unit, vo.Timestamp{}, lines); err == nil {
+		t.Error("LogsSinceEpochCommand accepted the zero Timestamp")
+	}
+	if _, err := LogsEpochWindowCommand(policy.Policy{}, unit, ts, vo.Timestamp{}, lines); err == nil {
+		t.Error("LogsEpochWindowCommand accepted the zero Timestamp as until")
+	}
+	if _, err := LogsRelativeWindowCommand(policy.Policy{}, unit, mustDuration(t, "1h"), vo.Duration{}, lines); err == nil {
+		t.Error("LogsRelativeWindowCommand accepted the zero Duration as until")
+	}
 }
