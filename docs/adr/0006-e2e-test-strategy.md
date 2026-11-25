@@ -26,7 +26,7 @@ focal は system ssh を介して実ホストを検査する CLI + Remote MCP �
 ## 追記(2026-11-25): systemd 入りの Amazon Linux 2023 コンテナを追加
 
 ### 理由
-ubuntu コンテナには systemd が無く、`service` / `logs` は「失敗する」ことしか確かめられない。journalctl・rpm・AL2023 の coreutils(ls・realpath 等)が実際に返す出力を e2e で確かめるため、systemd を PID 1 として動かす 2 つ目のコンテナを追加した。
+ubuntu コンテナには systemd が無く、`service` / `logs` は「失敗する」ことしか確かめられない。journalctl・rpm・AL2023 の coreutils(ls・realpath 等)が実際に返す出力を e2e で確かめるため、systemd を PID 1 として動かす 2 つ目のコンテナを追加した。追加の時点で検証するのは既存の operation(`service`・`logs`・`system` など)だけである。rpm・ls・realpath と、ls 用のフィクスチャ(`/srv/focal-e2e/ls-fixture`)は、#28 で続けて足す `package`・`files` の検証のために先に用意しておくもので、それぞれの operation を足す変更でテストを加える。
 
 ### 決定
 - `test/e2e/systemd/`(Dockerfile・docker-compose.yml・テスト用ユニット)に置く。ベースイメージは `amazonlinux:2023` をマルチアーキテクチャ index の digest で固定する。コンテナイメージ既定の `coreutils-single` は EC2 の AL2023 と同じ `coreutils` に入れ替える。
