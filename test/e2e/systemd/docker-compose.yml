@@ -17,6 +17,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # test/e2e itself, for the fixture script both images share.
+      additional_contexts:
+        e2e: ..
       args:
         PUBKEY: ${FOCAL_E2E_PUBKEY:?FOCAL_E2E_PUBKEY must be set by the harness}
     ports:

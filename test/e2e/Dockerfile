@@ -13,7 +13,7 @@ ARG PUBKEY
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        openssh-server procps iproute2 util-linux ca-certificates \
+        openssh-server procps iproute2 util-linux ca-certificates acl \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /run/sshd \
     && useradd -m -s /bin/bash e2e \
@@ -31,6 +31,31 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get remove -y nano \
     && rm -rf /var/lib/apt/lists/*
 
+# The directory tree the files operation is listed against, shared with the
+# AL2023 image (fixtures/files-fixture.sh). acl, installed above, is what lets
+# it put a POSIX ACL on one directory, which happens when the container starts
+# (CMD below): an ACL set during the build does not survive into the image.
+COPY fixtures/files-fixture.sh /usr/local/libexec/focal-files-fixture
+RUN chmod 755 /usr/local/libexec/focal-files-fixture && /usr/local/libexec/focal-files-fixture
+
+# Two more logins for the same key, whose sessions sshd gives an environment
+# that would change ls's output: BLOCK_SIZE and LS_BLOCK_SIZE set to human,
+# which would print sizes as 4.0K, and a fixed locale — C for e2e-env, C.UTF-8
+# for e2e-utf8. In C, ls -b escapes a non-ASCII name; in C.UTF-8 it prints it
+# as it is. The files tests list the same directories as each user. The Match
+# blocks go last in sshd_config, where they cannot swallow a setting after
+# them, and SetEnv overrides whatever the client sends.
+RUN for u in e2e-env e2e-utf8; do \
+        useradd -m -s /bin/bash "$u" \
+        && mkdir -p "/home/$u/.ssh" \
+        && printf '%s\n' "$PUBKEY" > "/home/$u/.ssh/authorized_keys" \
+        && chown -R "$u:$u" "/home/$u/.ssh" \
+        && chmod 700 "/home/$u/.ssh" \
+        && chmod 600 "/home/$u/.ssh/authorized_keys" || exit 1; \
+    done \
+    && printf '\nMatch User e2e-env\n    SetEnv BLOCK_SIZE=human LS_BLOCK_SIZE=human LC_ALL=C\n' >> /etc/ssh/sshd_config \
+    && printf 'Match User e2e-utf8\n    SetEnv BLOCK_SIZE=human LS_BLOCK_SIZE=human LC_ALL=C.UTF-8\n' >> /etc/ssh/sshd_config
+
 EXPOSE 22
 
 # `docker compose up --wait` blocks until this reports healthy, so the harness
@@ -39,4 +64,4 @@ EXPOSE 22
 HEALTHCHECK --interval=1s --timeout=3s --retries=60 --start-period=1s \
     CMD ss -H -ltn 'sport = :22' | grep -q LISTEN || exit 1
 
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+CMD ["sh", "-c", "/usr/local/libexec/focal-files-fixture acl && exec /usr/sbin/sshd -D -e"]

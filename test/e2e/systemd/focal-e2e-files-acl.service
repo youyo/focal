@@ -1,0 +1,11 @@
+[Unit]
+Description=focal E2E fixture: the POSIX ACL the files tests list against
+Before=sshd.service multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/focal-files-fixture acl
+
+[Install]
+WantedBy=multi-user.target
