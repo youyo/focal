@@ -14,6 +14,11 @@
 // available the harness is not built and every test skips, so a developer
 // without docker sees skips rather than failures.
 //
+// A second container, Amazon Linux 2023 with systemd as PID 1
+// (test/e2e/systemd), is started alongside the first and serves the tests in
+// al2023_test.go. Its start is awaited and checked only by those tests, through
+// requireAL2023, so it failing to boot fails them and leaves the rest alone.
+//
 // focal reaches a host through its own ssh(1), which it invokes with neither -F
 // nor -o: it accepts only an identity file, a port and a user, never an
 // ssh_config file or option. The suite therefore hands focal the port and key
@@ -139,6 +144,12 @@ func setup() (*harness, error) {
 		return nil, err
 	}
 
+	// The AL2023 fixture builds and boots in the background while the ubuntu
+	// one is set up. Its outcome is read only by requireAL2023, so a failure
+	// there fails the AL2023 tests alone.
+	al2023 := startAL2023(root, pubKey)
+	addTeardown(al2023.teardown)
+
 	focalBin, err := buildFocal(root, work)
 	if err != nil {
 		return nil, err
@@ -149,7 +160,7 @@ func setup() (*harness, error) {
 		return nil, err
 	}
 
-	configFile, err := writeFocalConfig(work, keyPath, port)
+	configFile, err := writeFocalConfig(work, "focal.yaml", keyPath, port)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +179,15 @@ func setup() (*harness, error) {
 	if err := waitReady(h); err != nil {
 		return nil, err
 	}
+
+	al2023.configure = func(port int) (*harness, error) {
+		cfg, err := writeFocalConfig(work, "focal-al2023.yaml", keyPath, port)
+		if err != nil {
+			return nil, err
+		}
+		return &harness{focalBin: focalBin, configFile: cfg, env: h.env}, nil
+	}
+	al2023Pending = al2023
 	return h, nil
 }
 
@@ -217,12 +237,12 @@ func buildFocal(root, work string) (string, error) {
 	return bin, nil
 }
 
-// writeFocalConfig writes the focal config that carries the container's port
-// and the generated key. Operations are left unset so focal runs on its
-// safe-side defaults — every inspection enabled except kernel — which is what
-// the tool-list and kernel assertions expect.
-func writeFocalConfig(work, keyPath string, port int) (string, error) {
-	path := filepath.Join(work, "focal.yaml")
+// writeFocalConfig writes the focal config, named name in work, that carries a
+// container's port and the generated key. Operations are left unset so focal
+// runs on its safe-side defaults — every inspection enabled except kernel —
+// which is what the tool-list and kernel assertions expect.
+func writeFocalConfig(work, name, keyPath string, port int) (string, error) {
+	path := filepath.Join(work, name)
 	body := fmt.Sprintf("execution:\n  port: %d\n  identity_file: %s\n", port, keyPath)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return "", err

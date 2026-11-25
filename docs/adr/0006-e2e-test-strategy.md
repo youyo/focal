@@ -1,7 +1,7 @@
 # 0006. E2E テストは build tag 隔離 + docker compose + go-sdk クライアントで構成し CI 別ジョブで実行する
 
 - 日付: 2026-08-24
-- ステータス: 採用
+- ステータス: 採用(2026-11-25 追記: systemd 入りの AL2023 コンテナを追加。末尾の「追記」を参照)
 
 ## コンテキスト
 focal は system ssh を介して実ホストを検査する CLI + Remote MCP ツールであり、単体テスト(mock Executor による golden argv 検証等)だけでは「実際に SSH 接続して operation が通るか」「MCP プロトコル(spec 2026-07-28 stateless Streamable HTTP)経由でツール呼び出しが成立するか」を保証できない。手動でコンテナを立てて検証していたが、再現性が無く回帰検知にならない。これを自動化しつつ、通常の `go build/test/lint` や開発体験を損なわない形にする必要があった。
@@ -22,3 +22,20 @@ focal は system ssh を介して実ホストを検査する CLI + Remote MCP �
 - 実 SSH・実 MCP の回帰が PR/main push ごとに自動検知される(CI 実行時間は e2e ジョブ分だけ増加、約 1 分)。
 - ローカルでは docker が必要。AF_UNIX bind を拒否する sandbox 環境では UDS 系テストがローカル fail するため、その裏取りは CI に依存する(ADR 外の運用メモだが E2E 前提として関連)。
 - 新規依存はゼロ。E2E は build tag で隔離されるため、E2E を持たない環境・ツールチェーンに影響しない。
+
+## 追記(2026-11-25): systemd 入りの Amazon Linux 2023 コンテナを追加
+
+### 理由
+ubuntu コンテナには systemd が無く、`service` / `logs` は「失敗する」ことしか確かめられない。journalctl・rpm・AL2023 の coreutils(ls・realpath 等)が実際に返す出力を e2e で確かめるため、systemd を PID 1 として動かす 2 つ目のコンテナを追加した。
+
+### 決定
+- `test/e2e/systemd/`(Dockerfile・docker-compose.yml・テスト用ユニット)に置く。ベースイメージは `amazonlinux:2023` をマルチアーキテクチャ index の digest で固定する。コンテナイメージ既定の `coreutils-single` は EC2 の AL2023 と同じ `coreutils` に入れ替える。
+- 起動は特権なし。`--privileged` も capability の追加も使わず、private な cgroup namespace と `security_opt: writable-cgroups=true`(Docker 28 以降)で、systemd がコンテナ自身の cgroup 配下だけに書けるようにする。`/run`・`/run/lock`・`/tmp` は tmpfs。ホストの `/sys/fs/cgroup` を rw でバインドする方式(cgroupns host)は、ホストの cgroup 階層全体へ書き込めるため採らない。
+- コンテナの時刻帯は Asia/Tokyo(`/etc/localtime`)。UTC 前提のずれが偶然一致で隠れないようにする。
+- e2e ユーザーは `systemd-journal` グループに入れる。グループ外のユーザーには journalctl が「-- No entries --」と終了コード 0 を返すため、テストは既知のログ行が実際に返ることを確かめ、空の ok を成功と数えない。
+- テスト用ユニット `focal-e2e-logger.service`(Type=notify、multi-user.target より前)が決まった文言の行と、改行を含む 1 エントリ(ネイティブの journal プロトコル)を書く。healthcheck は `systemctl is-system-running --wait` が running か degraded であることと sshd の待ち受けを見るので、healthy になった時点でログは揃っている。
+- compose ファイルとプロジェクトは ubuntu コンテナと別にし、ハーネスは両方を並行して起動する。AL2023 側の起動失敗はそれを使うテスト(`al2023_test.go`)だけの失敗になり、ubuntu 側のテストを巻き込まない。docker が無い環境でだけ skip し、docker があって起動できない場合は失敗にする(CI では赤になる)。
+
+### 影響
+- `mise run e2e` / CI の e2e ジョブで両コンテナのテストが走る。AL2023 イメージのビルド(dnf install)の分だけ初回の所要時間が増える。
+- Docker 28 未満のデーモンでは `writable-cgroups` が使えず、AL2023 のテストは失敗する。

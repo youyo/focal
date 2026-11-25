@@ -12,9 +12,19 @@ import (
 // local copy rather than an import so the E2E suite reads focal's JSON exactly
 // as any other client would, through the wire shape and not the Go type.
 type envelope struct {
-	Operation string `json:"operation"`
-	Status    string `json:"status"`
-	Stdout    string `json:"stdout"`
+	Operation string            `json:"operation"`
+	Status    string            `json:"status"`
+	Stdout    string            `json:"stdout"`
+	Data      map[string]string `json:"data"`
+	Parts     []part            `json:"parts"`
+}
+
+// part mirrors the fields of result.Part the suite asserts on, for operations
+// such as system that fold several commands into one envelope.
+type part struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Stdout string `json:"stdout"`
 }
 
 // errDoc mirrors the result.Error JSON focal writes for a refusal, on stderr
