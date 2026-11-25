@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"slices"
 	"strconv"
@@ -74,6 +75,20 @@ func AllowList(entries []string) vo.FilesAllowList { l, _ := vo.ParseFilesAllowL
 func Load() (Config, error) { return build(rawConfig{}) }`, configProducerViolations},
 		{"a method on Operation that returns one", `package config
 func (o Operation) With(x int) Operation { return o }`, configProducerViolations},
+		{"a method on Config that rebuilds it from bytes", `package config
+func (c Config) Reload(b []byte) Config { return c }`, configProducerViolations},
+		{"a method on Config that looks up by something else", `package config
+func (c Config) OperationFrom(yaml string) (Operation, bool) { return Operation{}, false }`, configProducerViolations},
+		{"an exported function literal", `package config
+var Parse = func(b []byte) (Config, error) { return Config{}, nil }`, configProducerViolations},
+		{"an exported variable of a producing function type", `package config
+var Parse func([]byte) Config`, configProducerViolations},
+		{"an exported variable of a function type returning a list", `package config
+import "github.com/youyo/focal/internal/vo"
+var Paths func([]string) vo.FilesAllowList`, configProducerViolations},
+		{"an exported alias of the unexported loader", `package config
+func loadFrom(path string, require bool) (Config, error) { return Config{}, nil }
+var LoadAny = loadFrom`, configProducerViolations},
 		{"an accessor with an argument", `package config
 import "github.com/youyo/focal/internal/vo"
 func (o Operation) FilesAllowListFor(path string) vo.FilesAllowList { return o.filesPaths }`, filesAccessorViolations},
@@ -110,8 +125,13 @@ func configProducerViolations(files []*ast.File) []string {
 				continue
 			}
 			if fn.Recv != nil {
-				if recvName(fn) != "Config" && !resultsOnlyFilesList(f, fn) {
+				switch {
+				case resultsOnlyFilesList(f, fn):
+					// filesAccessorViolations' concern.
+				case recvName(fn) != "Config":
 					out = append(out, fn.Name.Name+": an exported method on "+recvName(fn)+" returns a Config or an Operation")
+				case !isConfigLookup(fn):
+					out = append(out, fn.Name.Name+": an exported method on Config returns a Config or an Operation and takes something other than the operation name it looks up")
 				}
 				continue
 			}
@@ -123,6 +143,7 @@ func configProducerViolations(files []*ast.File) []string {
 				out = append(out, fn.Name.Name+": does not read its file through loadFrom, which checks its permissions")
 			}
 		}
+		out = append(out, exportedFuncVarViolations(files, f)...)
 		for _, decl := range f.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "loadFrom" && !calls(fn.Body, "readConfigFile") {
 				out = append(out, "loadFrom: does not read the file through readConfigFile")
@@ -130,6 +151,79 @@ func configProducerViolations(files []*ast.File) []string {
 		}
 	}
 	return out
+}
+
+// isConfigLookup reports whether a method on Config that returns a Config or an
+// Operation has one of the two shapes that only read what Load built: no
+// parameter at all, or Operation(name string) (Operation, bool).
+func isConfigLookup(fn *ast.FuncDecl) bool {
+	params := fn.Type.Params
+	if params == nil || len(params.List) == 0 {
+		return true
+	}
+	return fn.Name.Name == "Operation" && signature(params) == "string" && signature(fn.Type.Results) == "Operation, bool"
+}
+
+// exportedFuncVarViolations reports an exported package-level variable that
+// holds a function producing a Config, an Operation or a files list: its
+// declared type is such a function type, its value is a function literal of
+// that kind, or its value names a function of this package that is one. A
+// function value is an entry point as much as a function is.
+func exportedFuncVarViolations(files []*ast.File, f *ast.File) []string {
+	producers := map[string]bool{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && resultsMentionConfig(file, fn) {
+				producers[fn.Name.Name] = true
+			}
+		}
+	}
+	funcTypeProduces := func(expr ast.Expr) bool {
+		ft, ok := expr.(*ast.FuncType)
+		return ok && resultsMentionConfig(f, &ast.FuncDecl{Name: ast.NewIdent("_"), Type: ft})
+	}
+	var out []string
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			bad := vs.Type != nil && funcTypeProduces(vs.Type)
+			for _, v := range vs.Values {
+				switch val := v.(type) {
+				case *ast.FuncLit:
+					bad = bad || funcTypeProduces(val.Type)
+				case *ast.Ident:
+					bad = bad || producers[val.Name]
+				}
+			}
+			for _, name := range vs.Names {
+				if name.IsExported() && bad {
+					out = append(out, name.Name+": an exported variable holds a function that produces a Config, an Operation or a files list")
+				}
+			}
+		}
+	}
+	return out
+}
+
+func signature(fields *ast.FieldList) string {
+	if fields == nil {
+		return ""
+	}
+	var parts []string
+	for _, field := range fields.List {
+		n := len(field.Names)
+		if n == 0 {
+			n = 1
+		}
+		for range n {
+			parts = append(parts, types.ExprString(field.Type))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // filesAccessorViolations reports an exported function or method whose results

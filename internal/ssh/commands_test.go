@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -125,6 +126,9 @@ func TestFactoryArgvIsExact(t *testing.T) {
 // and to allowedCommandFactories but never exercised here would otherwise ship
 // an argv nobody wrote down.
 func TestFactoryCasesCoverTheCatalogue(t *testing.T) {
+	if problems := factoryRowProblems(factoryCases(t)); len(problems) > 0 {
+		t.Errorf("factoryCases rows:\n%s", strings.Join(problems, "\n"))
+	}
 	var covered []string
 	for _, tc := range factoryCases(t) {
 		if name := tc.factoryName(); !slices.Contains(covered, name) {
@@ -136,6 +140,58 @@ func TestFactoryCasesCoverTheCatalogue(t *testing.T) {
 	sort.Strings(want)
 	if !slices.Equal(covered, want) {
 		t.Errorf("factoryCases covers\n %q\nallowedCommandFactories lists\n %q", covered, want)
+	}
+}
+
+// multiCommandFactories names the factories that hand back more than one
+// Command, with the parts each must have at least one row for. Every other
+// factory has exactly one row, named after it.
+var multiCommandFactories = map[string][]string{
+	"FilesCommands": {"check", "list"},
+}
+
+// factoryRowProblems checks the shape of the rows before they are reduced to
+// factory names: a factory outside multiCommandFactories has one row, named
+// exactly as the factory, and a factory inside it has at least one row for
+// each of its parts ("FilesCommands/check", "FilesCommands/check shallow").
+func factoryRowProblems(cases []factoryCase) []string {
+	rows := map[string][]string{}
+	for _, tc := range cases {
+		name, part, _ := strings.Cut(tc.name, "/")
+		rows[name] = append(rows[name], part)
+	}
+	var problems []string
+	for name, parts := range rows {
+		want, multi := multiCommandFactories[name]
+		if !multi {
+			if len(parts) != 1 || parts[0] != "" {
+				problems = append(problems, fmt.Sprintf("%s has rows %q, want exactly one named %s", name, parts, name))
+			}
+			continue
+		}
+		for _, w := range want {
+			if !slices.ContainsFunc(parts, func(p string) bool { return p == w || strings.HasPrefix(p, w+" ") }) {
+				problems = append(problems, fmt.Sprintf("%s has no row for its %s Command (rows %q)", name, w, parts))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// TestFactoryRowProblemsCatchesBadRows feeds the row check the two mistakes it
+// exists for.
+func TestFactoryRowProblemsCatchesBadRows(t *testing.T) {
+	cases := factoryCases(t)
+	duplicated := append(slices.Clone(cases), cases[0])
+	if len(factoryRowProblems(duplicated)) == 0 {
+		t.Errorf("a second row for %s was accepted", cases[0].name)
+	}
+	oneSided := slices.DeleteFunc(slices.Clone(cases), func(tc factoryCase) bool {
+		return strings.HasPrefix(tc.name, "FilesCommands/list")
+	})
+	if len(factoryRowProblems(oneSided)) == 0 {
+		t.Error("FilesCommands without a list row was accepted")
 	}
 }
 
