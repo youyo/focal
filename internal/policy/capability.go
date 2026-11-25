@@ -28,6 +28,12 @@ var capabilities = map[string][]SudoMode{
 	"logs":   {SudoNever, SudoAuto},
 	"kernel": {SudoNever, SudoAuto},
 
+	// files lists one directory's names, types, sizes and modification times,
+	// and nothing else (ADR 0012). It never escalates: a listing taken as root
+	// would see further than the path checks are written for over SSH, and no
+	// configuration may choose that.
+	"files": {SudoNever},
+
 	// inspect runs no remote command of its own: it composes the read-only
 	// operations above, and each of those is resolved through its own row, so
 	// the composite never carries privilege itself.

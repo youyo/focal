@@ -1,15 +1,23 @@
 // Package config loads Focal's YAML configuration and validates it at startup.
 //
-// The config file decides only *what is allowed*: which operations exist for
-// this installation and, within the envelope internal/policy declares for each
-// one, which sudo mode applies. How an operation is carried out — the actual
-// remote command — is fixed in Focal's own code and cannot be influenced from
-// here. Anything the file asks for that Focal cannot grant is a startup error,
-// never a silent downgrade to something weaker, so an administrator learns that
-// a setting did not take effect before relying on it.
+// The config file decides *what is allowed*: which operations exist for this
+// installation and, within the envelope internal/policy declares for each one,
+// which sudo mode applies — on privilege, the file can only narrow what the
+// code declares. One key gives rather than narrows: operations.files.paths
+// names the directories the files operation may list. Even there the outer
+// limits are in the code and cannot be lifted from here: files returns only
+// names, types, sizes and modification times, one level deep, never under
+// sudo, never reading a file, and only along a path that root alone can change
+// (ADR 0012). How any operation is carried out — the program, its options, the
+// shape of the argv — is fixed in Focal's own code; a configured path is used
+// for matching only and never placed in an argv. Anything the file asks for
+// that Focal cannot grant is a startup error, never a silent downgrade to
+// something weaker, so an administrator learns that a setting did not take
+// effect before relying on it.
 //
 // With no config file at all, Load returns the safe-side defaults: every
-// read-only inspection enabled, kernel details disabled, and sudo nowhere.
+// read-only inspection enabled, kernel details and directory listings
+// disabled, and sudo nowhere.
 package config
 
 import (
@@ -78,6 +86,8 @@ type Operation struct {
 	policy   policy.Policy
 	maxLines vo.LineLimit
 	maxSince vo.Duration
+	// filesPaths is set for the files operation only.
+	filesPaths vo.FilesAllowList
 }
 
 // Enabled reports whether this installation offers the operation at all.
@@ -93,6 +103,14 @@ func (o Operation) MaxLines() vo.LineLimit { return o.maxLines }
 // MaxSince caps how far back the operation may look. It is the zero value for
 // operations that do not read a line stream.
 func (o Operation) MaxSince() vo.Duration { return o.maxSince }
+
+// FilesAllowList is the set of directories the files operation may list, as
+// operations.files.paths named them. It is the zero value — which allows
+// nothing — for every other operation. It takes no argument, so nothing a
+// caller supplies can shape the list it returns; the list itself copies its
+// entries in and out, so what one caller does with it cannot change what the
+// next one gets.
+func (o Operation) FilesAllowList() vo.FilesAllowList { return o.filesPaths }
 
 // rawConfig mirrors the YAML document. Every field is a pointer so that
 // "absent" and "set to the zero value" stay distinguishable: a file that omits
@@ -111,10 +129,11 @@ type rawExecution struct {
 }
 
 type rawOperation struct {
-	Enabled  *bool   `yaml:"enabled"`
-	Sudo     *string `yaml:"sudo"`
-	MaxLines *int    `yaml:"max_lines"`
-	MaxSince *string `yaml:"max_since"`
+	Enabled  *bool     `yaml:"enabled"`
+	Sudo     *string   `yaml:"sudo"`
+	MaxLines *int      `yaml:"max_lines"`
+	MaxSince *string   `yaml:"max_since"`
+	Paths    *[]string `yaml:"paths"`
 }
 
 // Load reads the config file and validates it. A missing file is not an error:
@@ -451,6 +470,17 @@ func buildOperation(name string, enabled bool, raw *rawOperation) (Operation, *r
 		if err := applyLogLimits(&op, name, raw); err != nil {
 			return Operation{}, err
 		}
+		if err := applyFilesPaths(&op, name, raw); err != nil {
+			return Operation{}, err
+		}
+	}
+	if name == filesOperation && op.enabled && len(op.filesPaths.Entries()) == 0 {
+		return Operation{}, result.ValidationError(
+			"files_paths_required",
+			"operation \"files\" is enabled but names no paths it may list",
+			opField(name, "paths"),
+			[]string{"one or more absolute directory paths under operations.files.paths"},
+		)
 	}
 	resolved, err := policy.Resolve(name, configured)
 	if err != nil {
@@ -458,6 +488,28 @@ func buildOperation(name string, enabled bool, raw *rawOperation) (Operation, *r
 	}
 	op.policy = resolved
 	return op, nil
+}
+
+// operationKeys lists the keys an operation's block accepts, for the allowed
+// list of an unsupported_operation_field error.
+func operationKeys(name string) []string {
+	keys := []string{"enabled", "sudo"}
+	if _, ok := lineStreamLimits[name]; ok {
+		keys = append(keys, "max_lines", "max_since")
+	}
+	if name == filesOperation {
+		keys = append(keys, "paths")
+	}
+	return keys
+}
+
+func unsupportedField(name, key string) *result.Error {
+	return result.ValidationError(
+		"unsupported_operation_field",
+		fmt.Sprintf("operation %q takes no %s", name, key),
+		opField(name, key),
+		operationKeys(name),
+	)
 }
 
 // applyLogLimits refuses log limits on an operation that reads no line stream,
@@ -472,12 +524,7 @@ func applyLogLimits(op *Operation, name string, raw *rawOperation) *result.Error
 			{"max_since", raw.MaxSince != nil},
 		} {
 			if unsupported.set {
-				return result.ValidationError(
-					"unsupported_operation_field",
-					fmt.Sprintf("operation %q takes no %s", name, unsupported.key),
-					opField(name, unsupported.key),
-					[]string{"enabled", "sudo"},
-				)
+				return unsupportedField(name, unsupported.key)
 			}
 		}
 		return nil
@@ -493,6 +540,30 @@ func applyLogLimits(op *Operation, name string, raw *rawOperation) *result.Error
 			return err
 		}
 	}
+	return nil
+}
+
+// applyFilesPaths reads operations.files.paths. The key belongs to files
+// alone; under any other operation it is refused rather than ignored. Every
+// entry is validated whether or not files is enabled, so a list that is wrong
+// is reported the day it is written rather than the day it is switched on.
+//
+// This is the one key that gives an operation somewhere to look rather than
+// narrowing what it may do. What files does with a place — list its names,
+// types, sizes and modification times, one level deep, without sudo, never
+// reading a file — is fixed in Focal's code and is not configurable (ADR 0012).
+func applyFilesPaths(op *Operation, name string, raw *rawOperation) *result.Error {
+	if raw.Paths == nil {
+		return nil
+	}
+	if name != filesOperation {
+		return unsupportedField(name, "paths")
+	}
+	list, err := vo.ParseFilesAllowList(*raw.Paths)
+	if err != nil {
+		return atField(err, opField(name, "paths"))
+	}
+	op.filesPaths = list
 	return nil
 }
 

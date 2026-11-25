@@ -48,6 +48,7 @@ func commandCases(t *testing.T) []commandCase {
 
 	uptime := must(ssh.UptimeCommand(p))
 	systemctl := must(ssh.ServiceStatusCommand(p, unit))
+	filesCheck, filesList := mustFilesCommands(t, "/var/log/nginx")
 
 	return []commandCase{
 		{name: "plain", cmd: uptime},
@@ -77,7 +78,28 @@ func commandCases(t *testing.T) []commandCase {
 		{name: "LogsSinceEpochCommand", cmd: must(ssh.LogsSinceEpochCommand(p, unit, from, scan))},
 		{name: "LogsEpochWindowCommand", cmd: must(ssh.LogsEpochWindowCommand(p, unit, from, to, lines))},
 		{name: "KernelLogsCommand", cmd: must(ssh.KernelLogsCommand(p, kernelSince, lines))},
+		{name: "FilesCommands/check", cmd: filesCheck},
+		{name: "FilesCommands/list", cmd: filesList},
 	}
+}
+
+// mustFilesCommands builds the check and the listing for one path under
+// /var/log, the way the files operation would.
+func mustFilesCommands(t *testing.T, path string) (ssh.Command, ssh.Command) {
+	t.Helper()
+	list, err := vo.ParseFilesAllowList([]string{"/var/log"})
+	if err != nil {
+		t.Fatalf("vo.ParseFilesAllowList: %v", err)
+	}
+	dir, err := vo.ParseFilesPath(path, list)
+	if err != nil {
+		t.Fatalf("vo.ParseFilesPath(%q): %v", path, err)
+	}
+	check, listing, buildErr := ssh.FilesCommands(policy.Policy{}, dir)
+	if buildErr != nil {
+		t.Fatalf("ssh.FilesCommands rejected its own argument: %v", buildErr)
+	}
+	return check, listing
 }
 
 // TestQuoteTokenRoundTrips is the property behind commandLine's second layer:
