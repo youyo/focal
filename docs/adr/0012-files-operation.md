@@ -349,7 +349,7 @@ lrwxrwxrwx  1   11 2026-01-02 03:04:05.000000000 +0900 ends\ -> -> regular.txt
 lrwxrwxrwx  1   10 2026-01-02 03:04:05.000000000 +0900 link-out -> ../outside
 -rw-r--r--  1    4 2026-01-02 03:04:05.000000000 +0900 name\ with\ space\nand\ newline\ ->\ arrow
 dr--r--r--  2 4096 2026-01-02 03:04:05.000000000 +0900 noexec
-drwxr-sr-x  2 4096 2026-01-02 03:04:05.000000000 +0900 setgid
+drwxr-sr-x  3 4096 2026-01-02 03:04:05.000000000 +0900 setgid
 ...
 ```
 
@@ -631,7 +631,7 @@ AL2023（coreutils 8.32、TZ=Asia/Tokyo）と ubuntu 24.04（coreutils 9.4、UTC
 
 - `ls -d -n` は複数の引数を名前順に並べ替えて出す。名前の欄は引数のとおり（`-b` で変わらない）。
   `mode` の末尾の `+` は、`ls -d -n` と `ls -g -o` の両方で `drwxr-xr-x+` の形で出た（両コンテナとも起動時に
-  `setfacl` で付けた ACL）。
+  `setfacl` で付けた ACL）。`2755` の root 所有ディレクトリ（`drwxr-sr-x`）を祖先に持つパスは通った。
 - symlink を `ls -d -n` に渡した行は `lrwxrwxrwx 1 0 0 10 … /path -> target`。途中・末尾・許可エントリ自身の
   symlink は、いずれも `not_directory` で拒否され、一覧は実行されなかった。
 - ディレクトリを指す symlink を `ls -A -b -g -o` に直接渡すと、リンク自身の 1 行になり、集計行は無い（上記）。
@@ -641,8 +641,8 @@ AL2023（coreutils 8.32、TZ=Asia/Tokyo）と ubuntu 24.04（coreutils 9.4、UTC
   および e2e で sshd の `SetEnv` を与えた利用者と与えない利用者の一覧が同じであること）。
 - 名前の中の `\` は `\\`、タブは `\t`、改行は `\n`、空白は `\ ` になる。`a ->` で終わる symlink は `a\ -> -> target`。
 - `LC_ALL=C` では非 ASCII の名前が `caf\303\251` のようにエスケープされ、`LC_ALL=C.UTF-8` ではそのまま出る。
-  **両コンテナとも、`SetEnv` を与えない SSH セッションの既定が UTF-8 のロケールだった**ので、既定の構成では
-  非 ASCII の名前は返らず、`skipped_lines` に数えられる。
+  **`SetEnv` を与えない SSH セッションは、両コンテナとも `LANG=C.UTF-8` だった**（手元から `LANG` を送っても
+  送らなくても同じ）。この既定の構成では、非 ASCII の名前は返らず、`skipped_lines` に数えられる。
 - 照合に通らないパス（`..`・末尾の `/`・`//`・`.`・相対・許可外・名前だけ前方一致する兄弟）は、`validation` の
   エラーで拒否された（executor を作る前の段階）。
 
