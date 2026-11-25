@@ -126,6 +126,26 @@ func TestServeWarnsOnceWhenFilesRunsOverSSM(t *testing.T) {
 	}
 }
 
+// TestServeRefusalWithFilesOverSSMIsOneErrorLine keeps the note for a server
+// that starts: a start refused for its address leaves stderr at the one error
+// line every refusal is.
+func TestServeRefusalWithFilesOverSSMIsOneErrorLine(t *testing.T) {
+	withConfig(t, filesConfigWithSSM)
+	t.Setenv(upstreamTokenEnv, "")
+	s := newServeApp(t)
+	err := serveUntilCancelled(s, serveOptions{listen: "127.0.0.1:0"})
+	if err == nil {
+		t.Fatal("serve started on loopback TCP with no token")
+	}
+	got := s.stderr.String()
+	if strings.Count(strings.TrimSuffix(got, "\n"), "\n") != 0 || strings.Contains(got, "root") {
+		t.Errorf("stderr = %q, want only the refusal", got)
+	}
+	if e := decodeError(t, runResult{stderr: got}); e.Code != "unauthenticated_listen_address" {
+		t.Errorf("code = %q", e.Code)
+	}
+}
+
 func TestMCPWarnsOnceWhenFilesRunsOverSSM(t *testing.T) {
 	for _, tc := range []struct {
 		name string

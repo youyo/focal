@@ -193,6 +193,10 @@ func (a *app) serve(ctx context.Context, o serveOptions) *cliError {
 	if err != nil {
 		return err
 	}
+	// Said only once the address is bound, so a start refused for its
+	// configuration, its keys or its address keeps stderr to the one error
+	// line every refusal is.
+	a.warnFilesOverSSM("focal serve", handler.cfg)
 	return a.serveOn(ctx, ln, handler)
 }
 
@@ -201,6 +205,9 @@ func (a *app) serve(ctx context.Context, o serveOptions) *cliError {
 type serveHandler struct {
 	http.Handler
 	write time.Duration
+	// cfg is the configuration the handler was built from, for what serve
+	// says about it once it is listening.
+	cfg config.Config
 }
 
 // serveHandler loads the configuration, registers the identity aliases and
@@ -211,7 +218,6 @@ func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliErr
 	if err != nil {
 		return nil, err
 	}
-	a.warnFilesOverSSM("focal serve", cfg)
 	auth, authErr := newUpstreamAuth(token)
 	if authErr != nil {
 		return nil, usageError(authErr.Code, authErr.Message, authErr.Field, authErr.Allowed)
@@ -243,7 +249,7 @@ func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliErr
 	if tokenChecked {
 		handler = auth.wrap(handler)
 	}
-	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor}, nil
+	return &serveHandler{Handler: handler, write: cfg.Timeout() * serveWriteFactor, cfg: cfg}, nil
 }
 
 // newServeRunner loads the configuration and registers the identity aliases
@@ -337,7 +343,7 @@ func (a *app) warnPlaintextBeyondLoopback(addr string) {
 		addr)
 }
 
-// warnFilesOverSSM says, once at the start of a command that keeps serving,
+// warnFilesOverSSM says, once a command that keeps serving has started,
 // what holds for files on an installation that offers both: over SSM the
 // listing is taken by root, so the same paths show what root can read rather
 // than what the SSH user can (ADR 0012). It is a fact about the configuration,
