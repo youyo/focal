@@ -102,6 +102,12 @@ ssh -n -T -o BatchMode=yes -- example.com ps -eo pid,ppid,user,state,%cpu,%mem,e
 # ServiceStatusCommand
 ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent
 
+# RPMQueryCommand
+ssh -n -T -o BatchMode=yes -- example.com rpm -q libstdc++6
+
+# DpkgStatusCommand
+ssh -n -T -o BatchMode=yes -- example.com dpkg-query -s libstdc++6
+
 # LogsCommand
 ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --reverse --no-pager --output=short-iso
 

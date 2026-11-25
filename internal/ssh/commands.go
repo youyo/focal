@@ -146,6 +146,24 @@ func ServiceStatusCommand(p policy.Policy, unit vo.ServiceName) (Command, *resul
 	)
 }
 
+// RPMQueryCommand builds rpm -q for one package: the RPM database's answer to
+// whether it is installed, which is the exit status, and under what version,
+// which is the one line on stdout. No --queryformat is passed, so there is no
+// format string for Focal to get wrong and the line is rpm's own default.
+func RPMQueryCommand(p policy.Policy, name vo.PackageName) (Command, *result.Error) {
+	return newCommand(p, "rpm", lit("-q"), val(name.String()))
+}
+
+// DpkgStatusCommand builds dpkg-query -s for one package: its control record
+// from the dpkg database, whose Status line says whether it is installed.
+// -s rather than -W because a package that was removed but kept its
+// configuration (the "rc" state) is still known to dpkg, and -W answers for it
+// with the same exit status and the same name-and-version line as for an
+// installed one. Reading the record's Status line is what separates them.
+func DpkgStatusCommand(p policy.Policy, name vo.PackageName) (Command, *result.Error) {
+	return newCommand(p, "dpkg-query", lit("-s"), val(name.String()))
+}
+
 // LogsCommand builds the journalctl invocation for one unit's logs.
 //
 // --since takes a relative span, and the "-" that makes it relative is part of

@@ -23,6 +23,14 @@ RUN apt-get update \
     && chmod 700 /home/e2e/.ssh \
     && chmod 600 /home/e2e/.ssh/authorized_keys
 
+# nano is installed and then removed without --purge, which leaves it in dpkg's
+# database in the "rc" state: not installed, but its configuration is still
+# recorded. The package operation has to report that as not installed.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nano \
+    && DEBIAN_FRONTEND=noninteractive apt-get remove -y nano \
+    && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 22
 
 # `docker compose up --wait` blocks until this reports healthy, so the harness

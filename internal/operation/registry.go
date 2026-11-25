@@ -43,7 +43,7 @@ func NewRegistry(enabled EnabledFunc) Registry {
 // Enabled reports whether name is turned on for this installation.
 func (r Registry) Enabled(name string) bool { return r.enabled(name) }
 
-// Params carries every caller-supplied value across all ten operations. A
+// Params carries every caller-supplied value across all eleven operations. A
 // registry row's builder reads only the fields the operation it builds
 // actually takes; CLI and MCP fill in whichever of these their request
 // named and leave the rest at the zero value.
@@ -57,6 +57,7 @@ type Params struct {
 	ProcessName string
 	PID         string
 	ServiceName string
+	PackageName string
 	Since       string
 	Lines       string
 	MaxSince    vo.Duration
@@ -69,7 +70,7 @@ type Params struct {
 // would use.
 type registryBuilder func(r Registry, params Params) (Operation, *result.Error)
 
-// registryTable is the single row set this package declares: Focal's ten
+// registryTable is the single row set this package declares: Focal's eleven
 // operation names, each paired with the one way to build it. registry_test.go
 // fails if this set and internal/policy's declared capabilities ever
 // diverge.
@@ -90,6 +91,13 @@ var registryTable = map[string]registryBuilder{
 	},
 	"service": func(_ Registry, params Params) (Operation, *result.Error) {
 		return NewService(params.ServiceName)
+	},
+	"package": func(_ Registry, params Params) (Operation, *result.Error) {
+		name, err := vo.ParsePackageName(params.PackageName)
+		if err != nil {
+			return nil, err
+		}
+		return NewPackage(name), nil
 	},
 	"logs": func(_ Registry, params Params) (Operation, *result.Error) {
 		service, err := vo.ParseServiceName(params.ServiceName)

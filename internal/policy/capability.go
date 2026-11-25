@@ -20,6 +20,7 @@ var capabilities = map[string][]SudoMode{
 	"network":   {SudoNever},
 	"processes": {SudoNever},
 	"service":   {SudoNever},
+	"package":   {SudoNever},
 
 	// journalctl may need privilege to read the system journal, so an
 	// administrator may opt into the escalate-only-on-denial mode for either

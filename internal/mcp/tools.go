@@ -66,6 +66,15 @@ func (a serviceArgs) params() operation.Params {
 	return operation.Params{ServiceName: a.Service}
 }
 
+type packageArgs struct {
+	hostArgs
+	Package string `json:"package" jsonschema:"the OS package to look up, e.g. procps or openssh-server; asked of rpm and dpkg, whichever the host has"`
+}
+
+func (a packageArgs) params() operation.Params {
+	return operation.Params{PackageName: a.Package}
+}
+
 type processesArgs struct {
 	hostArgs
 	Name string `json:"name,omitempty" jsonschema:"only processes whose command name contains this text"`
@@ -129,6 +138,7 @@ var toolSpecs = map[string]toolSpec{
 	"network":   {"Report the host's interfaces, addresses and listening sockets.", add[hostOnlyArgs]},
 	"processes": {"List the host's running processes, optionally narrowed to one name or pid.", add[processesArgs]},
 	"service":   {"Report the state of one systemd unit.", add[serviceArgs]},
+	"package":   {"Report whether one OS package is installed, and its version.", add[packageArgs]},
 	"logs":      {"Read one systemd unit's journal.", add[logsArgs]},
 	"kernel":    {"Read the kernel's own journal.", add[kernelArgs]},
 	"inspect":   {"Run focal's whole read-only survey of a host in one call.", add[hostOnlyArgs]},

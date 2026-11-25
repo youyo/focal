@@ -91,6 +91,26 @@ func TestRegistryServiceGoesThroughVOParse(t *testing.T) {
 	}
 }
 
+// TestRegistryPackageGoesThroughVOParse shows the package row refuses a name
+// vo.ParsePackageName does not accept, including the empty one a caller that
+// named no package would leave in Params.
+func TestRegistryPackageGoesThroughVOParse(t *testing.T) {
+	r := NewRegistry(nil)
+
+	for _, bad := range []string{"", "-qa", "lib*", "foo bar", "nginx;id"} {
+		if _, err := r.Build("package", Params{PackageName: bad}); err == nil {
+			t.Errorf("Build(package) accepted %q", bad)
+		}
+	}
+	op, err := r.Build("package", Params{PackageName: "libstdc++6"})
+	if err != nil {
+		t.Fatalf("Build(package) with a valid name: %v", err)
+	}
+	if op.Name() != "package" {
+		t.Errorf("op.Name() = %q, want package", op.Name())
+	}
+}
+
 // TestRegistryLogsGoesThroughVOParse shows the logs row rejects an invalid
 // since/lines and an invalid service name, and accepts an empty since/lines
 // as "use the default".

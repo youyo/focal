@@ -83,11 +83,11 @@ func TestToolNamesAreDerivedFromOperationNames(t *testing.T) {
 func TestToolSpecsCoverEveryOperation(t *testing.T) {
 	registry := operation.NewRegistry(nil)
 	for name := range toolSpecs {
-		if _, err := registry.Build(name, operation.Params{ServiceName: "nginx"}); err != nil {
+		if _, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx"}); err != nil {
 			t.Errorf("operation %q has a tool but cannot be built: %v", name, err)
 		}
 	}
-	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "logs", "kernel", "inspect"} {
+	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "package", "logs", "kernel", "inspect"} {
 		if _, ok := toolSpecs[name]; !ok {
 			t.Errorf("operation %q has no tool", name)
 		}
@@ -112,6 +112,7 @@ func TestSchemasExposeOnlyTypedParameters(t *testing.T) {
 		"inspect_network":   {"host", "user", "identity", "transport"},
 		"inspect_processes": {"host", "user", "identity", "transport", "name", "pid"},
 		"inspect_service":   {"host", "user", "identity", "transport", "service"},
+		"inspect_package":   {"host", "user", "identity", "transport", "package"},
 		"inspect_logs":      {"host", "user", "identity", "transport", "service", "since", "lines"},
 		"inspect_kernel":    {"host", "user", "identity", "transport", "since", "lines"},
 	}
@@ -177,6 +178,7 @@ func TestArgsCarryTheirValuesIntoParams(t *testing.T) {
 	}{
 		{"none", hostOnlyArgs{}, operation.Params{}},
 		{"service", serviceArgs{Service: "nginx"}, operation.Params{ServiceName: "nginx"}},
+		{"package", packageArgs{Package: "libstdc++6"}, operation.Params{PackageName: "libstdc++6"}},
 		{
 			"processes",
 			processesArgs{Name: "nginx", PID: &pid},

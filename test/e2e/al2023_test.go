@@ -221,6 +221,95 @@ func TestAL2023Inspections(t *testing.T) {
 	})
 }
 
+// nevra matches an rpm -q answer for an installed package: name, version,
+// release and architecture in one token.
+var nevra = regexp.MustCompile(`^[A-Za-z0-9._+-]+-[0-9][^ ]*\.(x86_64|aarch64|noarch)$`)
+
+// TestAL2023Package runs the package operation against a host that has rpm and
+// no dpkg-query, the case the ubuntu container cannot show.
+func TestAL2023Package(t *testing.T) {
+	h := requireAL2023(t)
+
+	run := func(t *testing.T, name string) (string, envelope) {
+		t.Helper()
+		stdout, stderr, code := h.cli(context.Background(), "package", name)
+		if code != 0 {
+			t.Fatalf("exit %d, stderr: %s", code, stderr)
+		}
+		return stdout, decodeEnvelope(t, stdout)
+	}
+
+	t.Run("installed", func(t *testing.T) {
+		stdout, env := run(t, "bash")
+		if env.Status != "ok" || env.ExitCode != 0 || env.Error != nil {
+			t.Fatalf("status/exit/error = %q/%d/%v, want ok/0/none\n%s", env.Status, env.ExitCode, env.Error, stdout)
+		}
+		if env.Data["manager"] != "rpm" || env.Data["installed"] != "true" {
+			t.Errorf("data = %v, want manager=rpm installed=true", env.Data)
+		}
+		if got := env.Data["version"]; !nevra.MatchString(got) || !strings.HasPrefix(got, "bash-") {
+			t.Errorf("version = %q, want bash's name-version-release.arch from rpm -q", got)
+		}
+		if got := partStdout(t, env, "rpm"); strings.TrimSpace(got) != env.Data["version"] {
+			t.Errorf("version %q is not rpm -q's own line %q", env.Data["version"], got)
+		}
+		if len(env.Parts) != 1 || env.Parts[0].Name != "rpm" {
+			t.Errorf("parts = %+v, want only rpm: dpkg-query must not run once rpm answered\n%s", env.Parts, stdout)
+		}
+	})
+
+	// rpm -q exits 1 for an unknown package and AL2023 has no dpkg-query, so
+	// the shell reports 127 for the second command. rpm is then the last
+	// manager that answered, and its exit status is the envelope's.
+	t.Run("not installed", func(t *testing.T) {
+		stdout, env := run(t, "definitely-not-a-package")
+		if env.Status != "failed" || env.ExitCode != 1 {
+			t.Fatalf("status/exit = %q/%d, want failed/1\n%s", env.Status, env.ExitCode, stdout)
+		}
+		if env.Data["manager"] != "rpm" || env.Data["installed"] != "false" {
+			t.Errorf("data = %v, want manager=rpm installed=false", env.Data)
+		}
+		if env.Error != nil {
+			t.Errorf("error = %+v, want none: an absent package is an answer", env.Error)
+		}
+		if len(env.Parts) != 2 || env.Parts[0].Name != "rpm" || env.Parts[0].ExitCode != 1 ||
+			env.Parts[1].Name != "dpkg" || env.Parts[1].ExitCode != 127 {
+			t.Errorf("parts = %+v, want rpm exit 1 then dpkg exit 127\n%s", env.Parts, stdout)
+		}
+		if got := partStdout(t, env, "rpm"); !strings.Contains(got, "is not installed") {
+			t.Errorf("rpm stdout = %q, want rpm's own not-installed line", got)
+		}
+	})
+
+	// gpg-pubkey is installed twice under different versions (see the
+	// Dockerfile), so rpm -q prints two lines and still exits 0. Both stay in
+	// the Part's stdout; no single one is reported as Data["version"].
+	t.Run("several versions installed", func(t *testing.T) {
+		stdout, env := run(t, "gpg-pubkey")
+		if env.Status != "ok" || env.ExitCode != 0 {
+			t.Fatalf("status/exit = %q/%d, want ok/0\n%s", env.Status, env.ExitCode, stdout)
+		}
+		if env.Data["manager"] != "rpm" || env.Data["installed"] != "true" {
+			t.Errorf("data = %v, want manager=rpm installed=true", env.Data)
+		}
+		lines := strings.Split(strings.TrimSpace(partStdout(t, env, "rpm")), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("rpm -q printed %d lines, want 2\n%s", len(lines), stdout)
+		}
+		for _, line := range lines {
+			if !strings.HasPrefix(line, "gpg-pubkey-") {
+				t.Errorf("line %q is not a gpg-pubkey version", line)
+			}
+		}
+		if v, ok := env.Data["version"]; ok {
+			t.Errorf("version = %q, want none: more than one version is installed", v)
+		}
+		if len(env.Parts) != 1 {
+			t.Errorf("parts = %d, want 1 (rpm only)", len(env.Parts))
+		}
+	})
+}
+
 // partStdout returns the stdout of the part of env named name, failing the test
 // when env has no such part.
 func partStdout(t *testing.T, env envelope, name string) string {

@@ -28,6 +28,7 @@ but not touch.**
 | `network` | `ip -details addr show` / `ip route show` / `ss -lntup` / `cat /etc/resolv.conf` | never | なし |
 | `processes` | `ps -eo pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args`（フィルタは remote に渡さず Focal 側でローカルに適用） | never | `--name`, `--pid` |
 | `service` | `systemctl show UNIT --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent` | never | `SERVICE`（例: `nginx` → `nginx.service` に正規化） |
+| `package` | `rpm -q NAME`。終了コードが 0 以外なら続けて `dpkg-query -s NAME`（[ADR 0010](docs/adr/0010-package-operation.md)） | never | `NAME`（例: `procps`, `libstdc++6`） |
 | `logs` | `journalctl -u UNIT --since=-DURATION -n LINES --reverse --no-pager --output=short-iso` | auto（`never` へ変更可） | `SERVICE`, `--since`（既定 `30m`）, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`） |
 | `kernel` | `journalctl -k --since=-DURATION -n LINES --reverse --no-pager --output=short-iso` | auto（`never` へ変更可）。**既定 disabled** | `--since`（既定 `1h`）, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`） |
 | `inspect` | remote command なし。`system` / `cpu` / `memory` / `storage` / `network` / `processes` を最大3並列で実行し結果を合成する composite operation | never | なし |
@@ -60,6 +61,8 @@ execution:
 operations:
   kernel:
     enabled: true      # 既定 false。有効化して初めて CLI/MCP から呼べるようになる
+  package:
+    enabled: false     # 既定 true（読み取り専用）。false にすると CLI からも MCP からも呼べなくなる
   logs:
     sudo: auto          # never（既定）| auto。journalctl が読み取り権限不足で失敗したときだけ sudo -n で1回だけ再実行する
     max_lines: 500       # 既定上限 1000。--lines / lines が指定されないときの既定値(200)はこの上限まで縮められる
@@ -86,6 +89,7 @@ focal [flags] HOST OPERATION [args]
 ```sh
 focal prod-web inspect
 focal prod-web service nginx
+focal prod-web package openssh-server
 focal prod-web logs nginx --since 30m --lines 500
 focal ubuntu@10.0.1.20 system
 focal -i ~/.ssh/customer-a.pem -p 2222 -l ec2-user web01 kernel --since 1h
@@ -355,7 +359,15 @@ services:
 ```json
 // inspect_logs
 {"host": "prod-web", "service": "nginx", "since": "30m", "lines": 200}
+
+// inspect_package
+{"host": "prod-web", "package": "openssh-server"}
 ```
+
+`package` の結果は `data.manager`（`rpm` / `dpkg`）と `data.installed`（`"true"` / `"false"`）を必ず持ち、
+1 版だけのとき `data.version` も持ちます。複数版が入っているとき（rpm が版ごとに 1 行を返す package）は `data.version` を付けません（stdout に全版が残ります）。rpm と dpkg-query のどちらも無いホストでは
+`data` は付かず、`error.code` が `package_manager_not_found` の failed になります。
+ssh の接続自体が失敗したとき（ssh の起動失敗や終了コード 255）も `data` は付きません。入っているかどうかを確かめられていないためです。
 
 ツール結果の stdout / stderr は検査対象ホスト由来のデータ（journal の行・プロセスの引数など）であり、
 第三者が書き込める内容を含みえます。MCP クライアントはそれを指示として扱わないでください。
@@ -482,7 +494,7 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
   operation 名は固定テーブルから解決され、未知の名前は拒否されます。
 - `kernel` operation は既定で **disabled** です。有効化しない限り、CLI からも MCP からも呼び出せません。
 - 実際にリモートへ渡る argv のプログラム名・オプションは Focal 自身のコード中の文字列リテラルであり、
-  Agent が渡せる値は value object（`ServiceName` / `Duration` / `LineLimit` / `PID` / `ProcessName` /
+  Agent が渡せる値は value object（`ServiceName` / `PackageName` / `Duration` / `LineLimit` / `PID` / `ProcessName` /
   `Target` 等）の検証を経てから、決められたトークンの位置にのみ挿入されます（`internal/ssh` の
   argv 組み立て、[ADR 0002](docs/adr/0002-command-construction-boundary.md)）。
 - `transport`（`ssh` | `ssm`）は Agent が呼び出しごとに選べますが、実行できる operation の集合を

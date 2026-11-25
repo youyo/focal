@@ -101,7 +101,7 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 		t.Error("TransportEnabled(ssm) = true, want false: an administrator must opt in")
 	}
 
-	readOnly := []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "logs", "inspect"}
+	readOnly := []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "package", "logs", "inspect"}
 	for _, name := range readOnly {
 		op := mustOperation(t, cfg, name)
 		if !op.Enabled() {
@@ -136,7 +136,7 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 	}
 
 	// Every other operation reads no line stream and carries no such limit.
-	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "inspect"} {
+	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "package", "inspect"} {
 		op := mustOperation(t, cfg, name)
 		if got := op.MaxLines(); got != (vo.LineLimit{}) {
 			t.Errorf("%s MaxLines() = %q, want the zero value", name, got.String())
@@ -148,7 +148,7 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 }
 
 // TestLoadWithoutConfigFileOffersEveryDeclaredOperation is the drift check on
-// the row count: an unconfigured Focal offers exactly the ten operations it
+// the row count: an unconfigured Focal offers exactly the eleven operations it
 // implements, no more and no fewer.
 func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 	isolate(t)
@@ -156,7 +156,7 @@ func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 
 	want := []string{
 		"system", "cpu", "memory", "storage", "network",
-		"processes", "service", "logs", "kernel", "inspect",
+		"processes", "service", "package", "logs", "kernel", "inspect",
 	}
 	if got := len(cfg.operations); got != len(want) {
 		t.Errorf("Load() returned %d operations, want %d", got, len(want))
@@ -173,7 +173,7 @@ func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 
 // TestLoadRejectsSudoAlwaysForEveryOperation carries issue #11's startup rule
 // through the administrator-facing path: writing `sudo: always` under any of
-// the ten operations stops startup rather than quietly running unprivileged.
+// the eleven operations stops startup rather than quietly running unprivileged.
 func TestLoadRejectsSudoAlwaysForEveryOperation(t *testing.T) {
 	for _, d := range defaultOperations {
 		t.Run(d.name, func(t *testing.T) {

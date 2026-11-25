@@ -39,6 +39,7 @@ func commandCases(t *testing.T) []commandCase {
 	since := mustDuration(t, "30m")
 	kernelSince := mustDuration(t, "1h")
 	lines := mustLineLimit(t, "200")
+	pkg := mustPackageName(t, "libstdc++6")
 
 	uptime := must(ssh.UptimeCommand(p))
 	systemctl := must(ssh.ServiceStatusCommand(p, unit))
@@ -64,6 +65,8 @@ func commandCases(t *testing.T) []commandCase {
 		{name: "ResolvConfCommand", cmd: must(ssh.ResolvConfCommand(p))},
 		{name: "ProcessListCommand", cmd: must(ssh.ProcessListCommand(p))},
 		{name: "ServiceStatusCommand", cmd: systemctl},
+		{name: "RPMQueryCommand", cmd: must(ssh.RPMQueryCommand(p, pkg))},
+		{name: "DpkgStatusCommand", cmd: must(ssh.DpkgStatusCommand(p, pkg))},
 		{name: "LogsCommand", cmd: must(ssh.LogsCommand(p, unit, since, lines))},
 		{name: "KernelLogsCommand", cmd: must(ssh.KernelLogsCommand(p, kernelSince, lines))},
 	}
@@ -204,6 +207,15 @@ func mustServiceName(t *testing.T, s string) vo.ServiceName {
 	name, err := vo.ParseServiceName(s)
 	if err != nil {
 		t.Fatalf("vo.ParseServiceName(%q): %v", s, err)
+	}
+	return name
+}
+
+func mustPackageName(t *testing.T, s string) vo.PackageName {
+	t.Helper()
+	name, err := vo.ParsePackageName(s)
+	if err != nil {
+		t.Fatalf("vo.ParsePackageName(%q): %v", s, err)
 	}
 	return name
 }

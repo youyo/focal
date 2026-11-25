@@ -256,6 +256,7 @@ func TestToolsListExposesEnabledOperationsOnly(t *testing.T) {
 		"inspect_logs",
 		"inspect_memory",
 		"inspect_network",
+		"inspect_package",
 		"inspect_processes",
 		"inspect_service",
 		"inspect_storage",
@@ -480,6 +481,28 @@ func TestValidationErrorIsAToolErrorNotAProtocolError(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Errorf("a rejected input still reached the runner: %+v", runner.calls)
+	}
+}
+
+func TestPackageToolBuildsThePackageOperation(t *testing.T) {
+	url, runner := serverFor(t, "", Options{})
+
+	res := callTool(t, url, "inspect_package", map[string]any{"host": "web", "package": "libstdc++6"})
+	if res.IsError {
+		t.Fatalf("call reported an error: %+v", res)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].operation != "package" {
+		t.Fatalf("runner calls = %+v, want one package call", runner.calls)
+	}
+
+	for _, bad := range []string{"lib*", "-qa", "foo bar", "nginx;id"} {
+		res := callTool(t, url, "inspect_package", map[string]any{"host": "web", "package": bad})
+		if got := toolErrorOf(t, res); got.Kind != result.KindValidation || got.Field != "package_name" {
+			t.Errorf("package %q: error = %+v, want a package_name validation error", bad, got)
+		}
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("a rejected package still reached the runner: %+v", runner.calls)
 	}
 }
 

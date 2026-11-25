@@ -50,6 +50,15 @@ for name in os.listdir(root):
 os.utime(root, (stamp, stamp))
 EOF
 
+# A second OpenPGP public key, imported next to the one AL2023 ships. rpm keeps
+# each imported key as an installed package named gpg-pubkey, so "rpm -q
+# gpg-pubkey" now answers with two versions of one name: the multi-version
+# output a kernel (an installonly package) gives on a real host, which this
+# image has no kernel to show. The key is a throwaway public key made for this
+# fixture; nothing is signed with it.
+COPY focal-e2e-second-key.asc /tmp/focal-e2e-second-key.asc
+RUN rpm --import /tmp/focal-e2e-second-key.asc && rm /tmp/focal-e2e-second-key.asc
+
 COPY focal-e2e-logger /usr/local/libexec/focal-e2e-logger
 COPY focal-e2e-logger.service /etc/systemd/system/focal-e2e-logger.service
 RUN chmod 755 /usr/local/libexec/focal-e2e-logger \

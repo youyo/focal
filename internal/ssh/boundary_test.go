@@ -36,6 +36,8 @@ var allowedCommandFactories = []string{
 	"ResolvConfCommand",
 	"ProcessListCommand",
 	"ServiceStatusCommand",
+	"RPMQueryCommand",
+	"DpkgStatusCommand",
 	"LogsCommand",
 	"KernelLogsCommand",
 }

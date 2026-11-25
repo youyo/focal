@@ -14,17 +14,20 @@ import (
 type envelope struct {
 	Operation string            `json:"operation"`
 	Status    string            `json:"status"`
+	ExitCode  int               `json:"exit_code"`
 	Stdout    string            `json:"stdout"`
 	Data      map[string]string `json:"data"`
+	Error     *errDoc           `json:"error"`
 	Parts     []part            `json:"parts"`
 }
 
 // part mirrors the fields of result.Part the suite asserts on, for operations
 // such as system that fold several commands into one envelope.
 type part struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Stdout string `json:"stdout"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
 }
 
 // errDoc mirrors the result.Error JSON focal writes for a refusal, on stderr

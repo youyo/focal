@@ -35,6 +35,7 @@ type argSpec struct {
 // closures written inline in the table so that the table stays a list of
 // declarations and `go vet` sees each accessor once.
 func serviceNameField(p *operation.Params) *string { return &p.ServiceName }
+func packageNameField(p *operation.Params) *string { return &p.PackageName }
 func processNameField(p *operation.Params) *string { return &p.ProcessName }
 func pidField(p *operation.Params) *string         { return &p.PID }
 func sinceField(p *operation.Params) *string       { return &p.Since }
@@ -59,6 +60,9 @@ var operationSpecs = map[string][]argSpec{
 	"inspect": {},
 	"service": {
 		{Usage: "SERVICE", Field: serviceNameField},
+	},
+	"package": {
+		{Usage: "NAME", Field: packageNameField},
 	},
 	"processes": {
 		{Flag: "name", Usage: "only processes whose command name contains this text", Field: processNameField},

@@ -284,6 +284,50 @@ func TestOutput_DefaultIsOneJSONLine(t *testing.T) {
 	}
 }
 
+func TestPackage_RecordsBothManagersInOrder(t *testing.T) {
+	withConfig(t, "")
+
+	rec := &sshtest.Recorder{}
+	rec.RespondSeq(
+		sshtest.Response{Output: ssh.Output{ExitCode: 127}},
+		sshtest.Response{Output: ssh.Output{Stdout: "Package: procps\nStatus: install ok installed\nVersion: 2:4.0.4\n"}},
+	)
+	res := runCLIWith(t, rec, "prod-web", "package", "procps")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.code, res.stderr)
+	}
+	if len(res.calls) != 2 {
+		t.Fatalf("recorded %d calls, want 2", len(res.calls))
+	}
+	if got := res.calls[0].Command; got.Program() != "rpm" || !slices.Equal(got.Args(), []string{"-q", "procps"}) {
+		t.Errorf("first call = %s %q, want rpm -q procps", got.Program(), got.Args())
+	}
+	if got := res.calls[1].Command; got.Program() != "dpkg-query" || !slices.Equal(got.Args(), []string{"-s", "procps"}) {
+		t.Errorf("second call = %s %q, want dpkg-query -s procps", got.Program(), got.Args())
+	}
+	env := decodeEnvelope(t, res)
+	if env.Operation != "package" || env.Data["manager"] != "dpkg" || env.Data["installed"] != "true" {
+		t.Errorf("envelope = %+v", env)
+	}
+}
+
+func TestPackage_RejectsAnInvalidNameBeforeConnecting(t *testing.T) {
+	withConfig(t, "")
+
+	for _, bad := range []string{"lib*", "-qa", "a b", "x;id"} {
+		res := runCLI(t, "prod-web", "package", bad)
+		if res.code == exitOK {
+			t.Fatalf("%q: exit code = 0, want non-zero", bad)
+		}
+		if len(res.calls) != 0 {
+			t.Errorf("%q: recorded %d calls, want 0", bad, len(res.calls))
+		}
+		if got := decodeError(t, res); got.Kind != result.KindValidation {
+			t.Errorf("%q: kind = %q, want validation", bad, got.Kind)
+		}
+	}
+}
+
 func TestOutput_PrettyIsIndented(t *testing.T) {
 	withConfig(t, "")
 

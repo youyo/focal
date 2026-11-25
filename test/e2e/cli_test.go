@@ -72,6 +72,57 @@ func TestCLIInspections(t *testing.T) {
 		})
 	}
 
+	// rpm is not on the container, so the package operation falls through to
+	// dpkg-query. An installed package is ok; one that is not is a completed
+	// inspection that failed; one dpkg still has on record after removal (nano,
+	// see the Dockerfile) is not installed either.
+	t.Run("package installed", func(t *testing.T) {
+		stdout, stderr, code := h.cli(context.Background(), "package", "procps")
+		if code != 0 {
+			t.Fatalf("exit %d, stderr: %s", code, stderr)
+		}
+		env := decodeEnvelope(t, stdout)
+		if env.Operation != "package" || env.Status != "ok" {
+			t.Fatalf("operation/status = %q/%q, want package/ok\n%s", env.Operation, env.Status, stdout)
+		}
+		if env.Data["manager"] != "dpkg" || env.Data["installed"] != "true" || env.Data["version"] == "" {
+			t.Errorf("data = %v, want manager=dpkg installed=true and a version", env.Data)
+		}
+		if got := len(env.Parts); got != 2 {
+			t.Errorf("parts = %d, want 2 (rpm, then dpkg)\n%s", got, stdout)
+		}
+	})
+	for _, tc := range []struct {
+		name      string
+		errorCode string
+	}{
+		// dpkg has no record: dpkg-query's own exit 1, no Error.
+		{"definitely-not-a-package", ""},
+		// dpkg has a record in the rc state: dpkg-query exits 0, and the
+		// Envelope says not installed through an Error instead.
+		{"nano", "package_not_installed"},
+	} {
+		t.Run("package not installed: "+tc.name, func(t *testing.T) {
+			stdout, stderr, code := h.cli(context.Background(), "package", tc.name)
+			if code != 0 {
+				t.Fatalf("exit %d, stderr: %s", code, stderr)
+			}
+			env := decodeEnvelope(t, stdout)
+			if env.Status != "failed" {
+				t.Fatalf("status = %q, want failed\n%s", env.Status, stdout)
+			}
+			if env.Data["manager"] != "dpkg" || env.Data["installed"] != "false" {
+				t.Errorf("data = %v, want manager=dpkg installed=false", env.Data)
+			}
+			switch {
+			case tc.errorCode == "" && env.Error != nil:
+				t.Errorf("error = %+v, want none: an absent package is an answer, not a failure to ask", env.Error)
+			case tc.errorCode != "" && (env.Error == nil || env.Error.Code != tc.errorCode):
+				t.Errorf("error = %+v, want code %s\n%s", env.Error, tc.errorCode, stdout)
+			}
+		})
+	}
+
 	t.Run("kernel is disabled by default", func(t *testing.T) {
 		stdout, stderr, code := h.cli(context.Background(), "kernel")
 		if code == 0 {
@@ -94,22 +145,24 @@ func TestCLIInspections(t *testing.T) {
 func TestCLIInjectionRejected(t *testing.T) {
 	h := requireHarness(t)
 
-	for _, service := range []string{
+	for _, name := range []string{
 		"nginx;id",
 		"$(id)",
 		"nginx|cat",
 		"../../etc/passwd",
 	} {
-		t.Run(service, func(t *testing.T) {
-			stdout, stderr, code := h.cli(context.Background(), "service", service)
-			if code == 0 {
-				t.Fatalf("injection accepted\nstdout: %s", stdout)
-			}
-			e := decodeError(t, stderr)
-			if e.Kind != "validation" {
-				t.Errorf("kind = %q, want validation\n%s", e.Kind, stderr)
-			}
-		})
+		for _, op := range []string{"service", "package"} {
+			t.Run(op+" "+name, func(t *testing.T) {
+				stdout, stderr, code := h.cli(context.Background(), op, name)
+				if code == 0 {
+					t.Fatalf("injection accepted\nstdout: %s", stdout)
+				}
+				e := decodeError(t, stderr)
+				if e.Kind != "validation" {
+					t.Errorf("kind = %q, want validation\n%s", e.Kind, stderr)
+				}
+			})
+		}
 	}
 }
 
