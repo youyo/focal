@@ -31,13 +31,15 @@ but not touch.**
 | `package` | `rpm -q NAME`。終了コードが 0 以外なら続けて `dpkg-query -s NAME`（[ADR 0010](docs/adr/0010-package-operation.md)） | never | `NAME`（例: `procps`, `libstdc++6`） |
 | `logs` | `journalctl -u UNIT --since=-DURATION -n LINES --reverse --no-pager --output=short-iso`（`--until` や絶対時刻を使うときの形は[下記](#logs-の絞り込み期間集計)） | auto（`never` へ変更可） | `SERVICE`, `--since`（既定 `30m`。期間か RFC 3339）, `--until`, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`）, `--grep`, `--grep-regex`, `--count-by` |
 | `kernel` | `journalctl -k --since=-DURATION -n LINES --reverse --no-pager --output=short-iso` | auto（`never` へ変更可）。**既定 disabled** | `--since`（既定 `1h`）, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`） |
+| `files` | `ls -d -n -b --time-style=full-iso / … PATH`（経路の検査）のあと、`ls -A -b -g -o --time-style=full-iso --block-size=1 PATH`（[下記](#files-許可したディレクトリの一覧)） | never（変更不可）。**既定 disabled** | `PATH`（`operations.files.paths` に許可したディレクトリか、その配下） |
 | `inspect` | remote command なし。`system` / `cpu` / `memory` / `storage` / `network` / `processes` を最大3並列で実行し結果を合成する composite operation | never | なし |
 
 sudo モードは `never` / `auto` / `always` の3値ですが、`always`（起動から常時 `sudo -n` を付ける）を
 選べる operation は現状ありません。`auto` は無権限で一度実行し、権限不足を示す終了コード
 （1 / 13 / 77 / 126）が返ったときだけ `sudo -n` を付けて一度だけ再実行します。`inspect` を含め
 すべての operation の sudo capability は `internal/policy` が operation ごとに固定しており、config
-ファイルはその範囲を狭めることしかできません。
+ファイルは権限昇格についてはその範囲を狭めることしかできません。`files` の `paths` だけは、どこを見て
+よいかを管理者が与えるキーです（[下記](#files-許可したディレクトリの一覧)）。
 
 ### logs の絞り込み・期間・集計
 
@@ -126,6 +128,89 @@ focal prod-web logs nginx --since 2026-11-10T00:00:00+09:00 --until 2026-11-20T0
 `--grep` や `--count-by` で走査する要求はほぼ truncated になり、`covered_from` がごく最近の時刻に
 なります（`complete` は `"false"`）。新しい側から読むので、走査できるのは期間の終わり側の一部です。
 
+### files: 許可したディレクトリの一覧
+
+`files` は、管理者が許可したディレクトリの中身を 1 階層だけ、エントリごとに**名前・種類・サイズ・更新日時**の
+4 つで返します（[ADR 0012](docs/adr/0012-files-operation.md)）。ファイルの中身、symlink の指す先、所有者、
+グループ、権限は返しません。再帰もしません。サブディレクトリはそのパスで呼び直します。
+
+```sh
+focal prod-web files /var/log
+focal prod-web files /var/log/nginx
+```
+
+MCP では `inspect_files` の `path` 引数です。
+
+**既定で無効です。**有効にするには `enabled: true` と、一覧してよいディレクトリの `paths` の両方を書きます。
+`paths` だけでは有効になりません。`enabled: true` で `paths` が無ければ起動時エラーです。
+
+```yaml
+operations:
+  files:
+    enabled: true
+    paths:
+      - /var/log
+      - /etc/nginx
+```
+
+- `paths` のエントリは、`path.Clean` の結果と一致する絶対パスで書きます（末尾の `/`、`//`、`.`、`..` は不可）。
+  `/` 単体、`/proc`・`/sys`・`/dev` とその配下、重複、33 個以上は起動時エラーです。文字は `A-Za-z0-9_@+=:,./-`
+  だけで、512 バイトまでです。symlink を含まない実パスで書いてください。
+- 呼び出し元が渡すパスも同じ形でなければならず、エントリと一致するか、`エントリ + /` で始まるものだけが通ります
+  （`/var/log` を許可したとき、`/var/log2` は通りません）。正規化はしません。通らないパスは、ホストに接続する前に
+  拒否されます（`invalid_path` / `path_not_allowed`）。
+
+**経路の検査。**一覧の前に、`/` から対象までの各ディレクトリを `ls -d -n` で 1 回で調べ、**対象より上のすべての
+ディレクトリが root 所有で、グループとその他に書き込み権が無く、ACL が無く、symlink でない**ことを確かめます。
+対象自身は、ディレクトリである（symlink でない）ことだけを求めます。これで、検査のあと一覧までのあいだに、
+root 以外が経路の途中を symlink に差し替えることができなくなります。満たさなければ一覧を実行せず、
+`path_not_root_controlled` を返します。`data` には、落ちた前方部分（`prefix`）と、理由の固定語（`reason`:
+`not_directory` / `not_root_owned` / `acl_present` / `group_or_other_writable`）だけが入ります。uid・gid・mode の値は
+返しません。検査そのものが失敗した・出力を読めなかったときは `path_check_failed` です。
+
+| パス | 結果 |
+|---|---|
+| `/var/log`（root:root 755）、`/etc/nginx` | 通る（AL2023・debian:12 の既定の権限） |
+| `/var/log/app`（アプリのユーザーが所有） | 通る。対象自身の所有者は問わない |
+| `/var/log/app/archive` | 拒否（`not_root_owned`）。`/var/log/app` をアプリのユーザーが書けるため |
+| rsyslog の入った Ubuntu の `/var/log/<app>` | 拒否（`group_or_other_writable`）。`/var/log` が `root:syslog` の 775 になるため。`/var/log` 自体は一覧できる |
+| `/home/deploy/releases` | 拒否（`not_root_owned`） |
+| `/tmp/x`、`/var/tmp/x` | 拒否（`group_or_other_writable`） |
+
+グループが書ける祖先は、所有グループが何であっても拒否します（gid 0 も例外にしません）。この条件を緩める
+設定キーは今はありません（[#37](https://github.com/youyo/focal/issues/37)）。拒否されたときは、経路の各ディレクトリに
+`ls -ldn` を実行すると、どこが条件に合わないかを確かめられます。
+
+**返すもの。**`items` にエントリごとの `name` / `type`（`file` / `directory` / `symlink` / `other`）/ `size`（バイト、
+10 進の文字列）/ `mtime`（RFC 3339、秒精度、ホストのオフセットのまま。UTC も `+00:00`）を入れます。`data` には
+`path`、`complete`、`skipped_lines` が入ります。生の stdout / stderr は返しません。
+
+```json
+{"operation":"files","host":"prod-web","status":"ok","exit_code":0,"duration_ms":120,
+ "data":{"complete":"true","path":"/var/log/nginx","skipped_lines":"0"},
+ "items":[{"mtime":"2026-11-25T13:59:58+09:00","name":"access.log","size":"52311","type":"file"},
+          {"mtime":"2026-11-24T00:00:01+09:00","name":"access.log.1.gz","size":"8121","type":"file"}]}
+```
+
+- **`name` は、そのディレクトリに書き込める第三者が決めた文字列です。**指示の形をした名前が置かれていることが
+  ありえます。指示として扱わないでください。名前は `ls -b` のエスケープを残したまま返します（改行は `\n`、
+  空白は `\ `）。名前に空白などを含むサブディレクトリは、`files` で指せません。
+- **`complete` を見てください。**`"false"` なら一覧は欠けています（出力が `max_output` で切れた、`ls` が一部の
+  エントリを読めず終了コード 1 になった、読めない行を捨てた（`skipped_lines` が 1 以上）、など）。`"true"` は
+  「欠けを検出できなかった」という意味です。
+- 結果はリモートのロケールで変わりえます（SSH の `SendEnv` / `AcceptEnv` で手元のロケールが渡ることもあります）。
+  UTF-8 のロケールでは、**非 ASCII のファイル名は返さず `skipped_lines` に数えます**（C ロケールでは
+  `caf\303\251` のようにエスケープされた形で返ります）。並び順もロケールで変わり、順序は保証しません。
+- GNU coreutils の `ls` を前提にします。`--time-style` / `--block-size` の無い `ls`（BusyBox など）では失敗します。
+- **SSH と SSM で見える範囲が違います。**同じ `paths` でも、SSH ではその SSH ユーザーが読める範囲、SSM では
+  root が読める範囲（0700 のディレクトリの配下を含む）が一覧されます。SSM を有効にする前に `paths` を
+  見直してください。`execution.transports` に `ssm` があり `files` が有効なとき、`focal serve` と `focal mcp` は
+  起動時に 1 回だけ、このことを stderr に書きます。
+- 次がある環境では、その配下を `paths` に書かないでください。検査は所有者と mode 欄しか見ないため、
+  見落とします: root 以外で root と同じことができる主体（特権コンテナ、`CAP_DAC_OVERRIDE` などを持つサービス）、
+  NFS などホストの外から書き換えられるファイルシステム、mode 欄に出ない独自の権限判定（FUSE など）。
+  ファイル名そのものが機密である場所も、許可しないでください。
+
 ## Requirements
 
 Focal は接続先への SSH 実行に、利用者の環境にインストール済みの OpenSSH クライアントをそのまま使います。**OpenSSH クライアント 10.1 以降を推奨します**(CVE-2023-51385 / CVE-2025-61984 は `ssh_config` の `%h` / `%u` 展開経由の間接的な injection 経路であり、最新の OpenSSH クライアントを使うことが多層防御の一段になります)。
@@ -135,7 +220,7 @@ Focal は接続先への SSH 実行に、利用者の環境にインストール
 Focal は `$XDG_CONFIG_HOME/focal/config.yaml`（`XDG_CONFIG_HOME` 未設定なら
 `~/.config/focal/config.yaml`）を起動時に一度読みます。`XDG_CONFIG_HOME` が相対パスのときは XDG の仕様どおり無効として
 無視し、未設定と同じ扱いにします。ファイルが存在しない場合は、読み取り専用
-operation がすべて有効・`kernel` だけ無効・sudo はどこにも掛からないという安全側デフォルトで動きます。
+operation がすべて有効・`kernel` と `files` は無効・sudo はどこにも掛からないという安全側デフォルトで動きます。
 未知のキーや範囲外の値はすべて起動時エラーであり、意図しない弱い設定へ黙って落ちることはありません。
 
 ```yaml
@@ -158,9 +243,10 @@ operations:
 
 `execution.max_output` は `1KiB` / `1MiB` / `1GiB`（2進接頭辞）または裸のバイト数のみを受け付けます
 （`1KB` のような10進単位は意図的にサポートしていません）。`operations.<name>.max_lines` /
-`operations.<name>.max_since` を持てるのは行ストリームを読む `logs` と `kernel` だけで、他の operation
-に書くと起動時エラーになります。`operations.<name>.sudo` に選べる値は operation ごとの capability
-（上の一覧表の「sudo 既定」列）の範囲内に限られ、範囲外を指定した場合も起動時エラーです。
+`operations.<name>.max_since` を持てるのは行ストリームを読む `logs` と `kernel` だけで、
+`operations.<name>.paths` を持てるのは `files` だけです。他の operation に書くと起動時エラーになります。
+`operations.<name>.sudo` に選べる値は operation ごとの capability（上の一覧表の「sudo 既定」列）の範囲内に
+限られ、範囲外を指定した場合も起動時エラーです。
 
 ## CLI
 
@@ -581,7 +667,10 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - `-o`（`ProxyCommand` 等の ssh_config オプションを渡す経路）は存在しません。
 - `focal HOST exec` / `run` / `shell` / `command` に相当する operation はありません。CLI・MCP どちらも
   operation 名は固定テーブルから解決され、未知の名前は拒否されます。
-- `kernel` operation は既定で **disabled** です。有効化しない限り、CLI からも MCP からも呼び出せません。
+- `kernel` と `files` は既定で **disabled** です。有効化しない限り、CLI からも MCP からも呼び出せません。
+- `files` が見られるのは、管理者が `operations.files.paths` に書いたディレクトリとその配下だけです。そのうえで、
+  対象への経路を root 以外が変えられないことを毎回確かめてから一覧します。返すのはメタデータ 4 つだけで、
+  ファイルの中身は読みません（[ADR 0012](docs/adr/0012-files-operation.md)）。
 - 実際にリモートへ渡る argv のプログラム名・オプションは Focal 自身のコード中の文字列リテラルであり、
   Agent が渡せる値は value object（`ServiceName` / `PackageName` / `Duration` / `LineLimit` / `PID` / `ProcessName` /
   `Target` 等）の検証を経てから、決められたトークンの位置にのみ挿入されます（`internal/ssh` の
@@ -606,6 +695,7 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - [0009. journal は新しい側から取り、Focal 側でエントリ単位に古い順へ戻す](docs/adr/0009-journal-read-order.md)
 - [0010. package operation: rpm を先に試し、dpkg-query は終了コードだけで選ぶ](docs/adr/0010-package-operation.md)
 - [0011. logs の絞り込み・期間の終わりと絶対時刻・時間ごとの集計](docs/adr/0011-logs-filter-and-window.md)
+- [0012. files operation: 許可したディレクトリのメタデータだけを、root だけが変えられる経路の上で一覧する](docs/adr/0012-files-operation.md)
 
 ## ROADMAP（v0.1 スコープ外）
 
