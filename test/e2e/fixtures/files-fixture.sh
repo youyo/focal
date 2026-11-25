@@ -6,7 +6,8 @@
 #   /srv/focal-e2e/files/allowed        the allowed directory: root's, 0755
 #     regular.txt                       "hello\n", 6 bytes
 #     subdir/nested.txt                 a subdirectory to list in a second call
-#     setgid/                           root's, 2755: setgid does not refuse a path
+#     setgid/inner/                     setgid is root's, 2755: setgid on a directory
+#                                       above the target does not refuse the path
 #     a file named with a space, a newline and " -> "
 #     a file named with a newline and a whole forged ls line
 #     ends ->                           a symlink whose own name ends in " ->"
@@ -41,7 +42,7 @@ fi
 groupadd -r focal-grp
 useradd -r -M -s /usr/sbin/nologin focal-app
 
-mkdir -p "$allowed/subdir" "$allowed/setgid" "$allowed/appowned/archive" \
+mkdir -p "$allowed/subdir" "$allowed/setgid/inner" "$allowed/appowned/archive" \
     "$allowed/grp775/inner" "$allowed/other1777/inner" "$allowed/acl/inner" \
     "$allowed/noexec" "$allowed/nonascii" "$root/outside/secret-dir"
 

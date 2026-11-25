@@ -65,14 +65,16 @@ func withFilesConfig(t *testing.T, h *harness) *harness {
 	return &harness{focalBin: h.focalBin, configFile: path, env: h.env}
 }
 
-// filesAs lists path as user, which is e2e or e2e-env.
+// filesAs lists path as user (e2e, e2e-env or e2e-utf8) and returns the
+// envelope and everything focal wrote, stdout and stderr together, for the
+// checks that something never appears anywhere.
 func filesAs(t *testing.T, h *harness, user, path string) (envelope, string) {
 	t.Helper()
 	stdout, stderr, code := h.run(context.Background(), nil, "--config", h.configFile, user+"@127.0.0.1", "files", path)
 	if code != 0 {
 		t.Fatalf("files %s as %s: exit %d, stderr: %s", path, user, code, stderr)
 	}
-	return decodeEnvelope(t, stdout), stdout
+	return decodeEnvelope(t, stdout), stdout + stderr
 }
 
 // filesFixtureEntries is what the allowed directory holds: name as ls -b
@@ -156,10 +158,11 @@ func TestFilesListsSubdirectoriesInTheirOwnCall(t *testing.T) {
 		if env.Status != "ok" || len(env.Items) != 1 || env.Items[0]["name"] != "archive" {
 			t.Errorf("appowned: status = %q, items = %v\n%s", env.Status, env.Items, raw)
 		}
-		// A root directory with setgid (2755) is on a path root controls.
-		env, raw = filesAs(t, h, "e2e", filesAllowed+"/setgid")
+		// A root directory with setgid (2755) above the target is on a
+		// path root controls.
+		env, raw = filesAs(t, h, "e2e", filesAllowed+"/setgid/inner")
 		if env.Status != "ok" || env.Error != nil || env.Data["complete"] != "true" {
-			t.Errorf("setgid: status = %q, error = %+v\n%s", env.Status, env.Error, raw)
+			t.Errorf("under setgid: status = %q, error = %+v\n%s", env.Status, env.Error, raw)
 		}
 	})
 }

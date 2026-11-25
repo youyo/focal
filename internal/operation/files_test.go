@@ -25,33 +25,62 @@ const filesTestDir = "/srv/focal-e2e/files/allowed"
 var filesTestChain = []string{"/", "/srv", "/srv/focal-e2e", "/srv/focal-e2e/files", filesTestDir}
 
 // filesListingAL2023 is ls -A -b -g -o --time-style=full-iso --block-size=1 of
-// the e2e fixture directory as Amazon Linux 2023 (coreutils 8.32) printed it,
-// taken as an unprivileged user. ubuntu 24.04 (coreutils 9.4) printed the same
-// lines. The second entry is a file whose name holds a newline followed by a
-// line ls itself could have printed.
-const filesListingAL2023 = `total 20480
--rw-r--r-- 1    1 2026-11-25 08:02:25.932625085 +0000 a\ b\n-rw-r--r--\ 1\ 0\ 2026-01-02\ 03:04:05.000000000\ +0900\ forged
-drwxr-xr-x 3 4096 2026-11-25 08:02:25.932625085 +0000 appowned
--rw-r--r-- 1    1 2026-11-25 08:02:25.933625099 +0000 back\\slash\ttab
-lrwxrwxrwx 1   11 2026-11-25 08:02:25.933625099 +0000 ends\ -> -> regular.txt
-lrwxrwxrwx 1   11 2026-11-25 08:02:25.932625085 +0000 link-file -> regular.txt
-lrwxrwxrwx 1   10 2026-11-25 08:02:25.932625085 +0000 link-out -> ../outside
--rw-r--r-- 1    6 2026-01-02 03:04:05.000000000 +0900 regular.txt
-drwxr-sr-x 2 4096 2026-11-25 08:02:25.932625085 +0000 sub
+// the e2e fixture's allowed directory, exactly as Amazon Linux 2023 (coreutils
+// 8.32, Asia/Tokyo) printed it to the unprivileged e2e user over SSH. ubuntu
+// 24.04 (coreutils 9.4) printed the same lines in UTC. The first entry is a
+// file whose name holds a newline followed by a line ls itself could have
+// printed; acl carries a real POSIX ACL, whose "+" pads every other mode
+// with a second space.
+const filesListingAL2023 = `total 49152
+-rw-r--r--  1    1 2026-01-02 03:04:05.000000000 +0900 a\ b\n-rw-r--r--\ 1\ 0\ 2026-01-02\ 03:04:05.000000000\ +0900\ forged
+drwxr-xr-x+ 1 4096 2026-01-02 03:04:05.000000000 +0900 acl
+drwxr-xr-x  3 4096 2026-01-02 03:04:05.000000000 +0900 appowned
+lrwxrwxrwx  1   11 2026-01-02 03:04:05.000000000 +0900 ends\ -> -> regular.txt
+drwxrwxr-x  3 4096 2026-01-02 03:04:05.000000000 +0900 grp775
+lrwxrwxrwx  1   10 2026-01-02 03:04:05.000000000 +0900 link-out -> ../outside
+lrwxrwxrwx  1   11 2026-01-02 03:04:05.000000000 +0900 link-to-regular -> regular.txt
+-rw-r--r--  1    4 2026-01-02 03:04:05.000000000 +0900 name\ with\ space\nand\ newline\ ->\ arrow
+dr--r--r--  2 4096 2026-01-02 03:04:05.000000000 +0900 noexec
+drwxr-xr-x  2 4096 2026-01-02 03:04:05.000000000 +0900 nonascii
+drwxrwxrwt  3 4096 2026-01-02 03:04:05.000000000 +0900 other1777
+-rw-r--r--  1    6 2026-01-02 03:04:05.000000000 +0900 regular.txt
+drwxr-sr-x  3 4096 2026-01-02 03:04:05.000000000 +0900 setgid
+drwxr-xr-x  2 4096 2026-01-02 03:04:05.000000000 +0900 subdir
 `
 
-var filesListingAL2023Items = []map[string]string{
-	{"name": `a\ b\n-rw-r--r--\ 1\ 0\ 2026-01-02\ 03:04:05.000000000\ +0900\ forged`, "type": "file", "size": "1", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": "appowned", "type": "directory", "size": "4096", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": `back\\slash\ttab`, "type": "file", "size": "1", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": `ends\ ->`, "type": "symlink", "size": "11", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": "link-file", "type": "symlink", "size": "11", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": "link-out", "type": "symlink", "size": "10", "mtime": "2026-11-25T08:02:25+00:00"},
-	{"name": "regular.txt", "type": "file", "size": "6", "mtime": "2026-01-02T03:04:05+09:00"},
-	{"name": "sub", "type": "directory", "size": "4096", "mtime": "2026-11-25T08:02:25+00:00"},
+func fixtureItem(name, kind, size string) map[string]string {
+	return map[string]string{"name": name, "type": kind, "size": size, "mtime": "2026-01-02T03:04:05+09:00"}
 }
 
-// filesQuestionMarkLines is what ls printed (exit 1) for a directory the user
+var filesListingAL2023Items = []map[string]string{
+	fixtureItem(`a\ b\n-rw-r--r--\ 1\ 0\ 2026-01-02\ 03:04:05.000000000\ +0900\ forged`, "file", "1"),
+	fixtureItem("acl", "directory", "4096"),
+	fixtureItem("appowned", "directory", "4096"),
+	fixtureItem(`ends\ ->`, "symlink", "11"),
+	fixtureItem("grp775", "directory", "4096"),
+	fixtureItem("link-out", "symlink", "10"),
+	fixtureItem("link-to-regular", "symlink", "11"),
+	fixtureItem(`name\ with\ space\nand\ newline\ ->\ arrow`, "file", "4"),
+	fixtureItem("noexec", "directory", "4096"),
+	fixtureItem("nonascii", "directory", "4096"),
+	fixtureItem("other1777", "directory", "4096"),
+	fixtureItem("regular.txt", "file", "6"),
+	fixtureItem("setgid", "directory", "4096"),
+	fixtureItem("subdir", "directory", "4096"),
+}
+
+// filesCheckAL2023 is the check's answer for the fixture's acl directory as
+// AL2023 printed it: the target carries an ACL, which the check does not hold
+// against the directory itself.
+const filesCheckAL2023 = `drwxr-xr-x  1 0 0 4096 2026-11-25 17:43:59.276737844 +0900 /
+drwxr-xr-x  1 0 0 4096 2026-11-25 17:28:08.000000000 +0900 /srv
+drwxr-xr-x  1 0 0 4096 2026-11-25 17:43:18.000000000 +0900 /srv/focal-e2e
+drwxr-xr-x  1 0 0 4096 2026-01-02 03:04:05.000000000 +0900 /srv/focal-e2e/files
+drwxr-xr-x  1 0 0 4096 2026-01-02 03:04:05.000000000 +0900 /srv/focal-e2e/files/allowed
+drwxr-xr-x+ 1 0 0 4096 2026-01-02 03:04:05.000000000 +0900 /srv/focal-e2e/files/allowed/acl
+`
+
+// filesQuestionMarkListing is what ls printed (exit 1) for a directory the user
 // may read but not search: each entry it could not lstat has every column
 // replaced by "?", the date and time by a single one. AL2023 and ubuntu 24.04
 // printed the same two lines.
@@ -194,7 +223,7 @@ func TestFilesReturnsNoRawOutput(t *testing.T) {
 	}
 	// The forged entry's escaped name holds "-rw-r--r--" on purpose, so
 	// modes are looked for only in the forms no entry name here carries.
-	for _, leak := range []string{"../outside", "-> regular.txt", "secret-name", "check-stderr", "total 20480", "drwxr", "lrwx"} {
+	for _, leak := range []string{"../outside", "-> regular.txt", "secret-name", "check-stderr", "total 49152", "drwxr", "lrwx"} {
 		if strings.Contains(string(body), leak) {
 			t.Errorf("the envelope carries %q:\n%s", leak, body)
 		}
@@ -360,6 +389,20 @@ func TestFilesCheckAccepts(t *testing.T) {
 	}
 }
 
+// TestFilesCheckReadsARealAnswer runs the check's reading over an answer AL2023
+// printed, column padding and the target's ACL included.
+func TestFilesCheckReadsARealAnswer(t *testing.T) {
+	rec := &sshtest.Recorder{}
+	rec.RespondSeq(resp(filesCheckAL2023, 0), resp("total 0\n", 0))
+	env, err := NewFiles(filesDir(t, filesTestDir+"/acl")).Execute(context.Background(), rec, packageTarget(t), filesPolicy(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if env.Error != nil || len(rec.Calls()) != 2 {
+		t.Fatalf("Error = %v, %d commands ran: the real answer was refused", env.Error, len(rec.Calls()))
+	}
+}
+
 func TestFilesCheckFailures(t *testing.T) {
 	good := rootChain(filesTestChain)
 	edit := func(f func([]string) []string) string { return joinLines(f(slices.Clone(good))) }
@@ -465,10 +508,10 @@ func TestFilesListingLines(t *testing.T) {
 		{name: "a fifo is other", line: "prw-r--r-- 1 0" + ts + "fifo",
 			want: map[string]string{"name": "fifo", "type": "other", "size": "0", "mtime": "2026-01-02T03:04:05+09:00"}},
 		{name: "an SELinux dot after the mode", line: "-rw-r--r--. 1 6" + ts + "labelled",
-			want: map[string]string{"name": "labelled", "type": "file", "size": "6", "mtime": "2026-01-02T03:04:05+09:00"}},
+			want:    map[string]string{"name": "labelled", "type": "file", "size": "6", "mtime": "2026-01-02T03:04:05+09:00"},
+			comment: "the form an SELinux context is assumed to take; neither e2e container labels its files"},
 		{name: "an ACL plus after the mode", line: "-rw-rw-r--+ 1 6" + ts + "acl",
-			want:    map[string]string{"name": "acl", "type": "file", "size": "6", "mtime": "2026-01-02T03:04:05+09:00"},
-			comment: "the form the ACL plus is assumed to take in -g -o output; the e2e fixture takes it from a real ls"},
+			want: map[string]string{"name": "acl", "type": "file", "size": "6", "mtime": "2026-01-02T03:04:05+09:00"}},
 		{name: "a UTC timestamp keeps its offset", line: "-rw-r--r-- 1 6 2026-11-25 08:02:25.932625085 +0000 utc",
 			want: map[string]string{"name": "utc", "type": "file", "size": "6", "mtime": "2026-11-25T08:02:25+00:00"}},
 		{name: "a negative offset", line: "-rw-r--r-- 1 6 2026-11-25 08:02:25.932625085 -0330 nst",
@@ -640,8 +683,8 @@ func TestFilesUnterminatedOutputDropsTheLastLine(t *testing.T) {
 // name holding a newline and a whole ls line comes back as one escaped name.
 func TestFilesForgedLinesAreNotEntries(t *testing.T) {
 	env, _ := runFiles(t, okChain(), resp(filesListingAL2023, 0))
-	if got := len(env.Items); got != 8 {
-		t.Fatalf("%d items, want the 8 real entries", got)
+	if got := len(env.Items); got != 14 {
+		t.Fatalf("%d items, want the 14 real entries", got)
 	}
 	for _, it := range env.Items {
 		if it["name"] == "forged" {

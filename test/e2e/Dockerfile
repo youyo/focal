@@ -34,7 +34,9 @@ RUN apt-get update \
 # The directory tree the files operation is listed against, shared with the
 # AL2023 image (fixtures/files-fixture.sh). acl, installed above, is what lets
 # it put a POSIX ACL on one directory, which happens when the container starts
-# (CMD below): an ACL set during the build does not survive into the image.
+# (CMD below): an ACL set during the build does not survive into the image. A
+# failure there leaves sshd to start anyway, so only the ACL test fails, the way
+# a failed unit leaves the AL2023 container degraded rather than down.
 COPY fixtures/files-fixture.sh /usr/local/libexec/focal-files-fixture
 RUN chmod 755 /usr/local/libexec/focal-files-fixture && /usr/local/libexec/focal-files-fixture
 
@@ -64,4 +66,4 @@ EXPOSE 22
 HEALTHCHECK --interval=1s --timeout=3s --retries=60 --start-period=1s \
     CMD ss -H -ltn 'sport = :22' | grep -q LISTEN || exit 1
 
-CMD ["sh", "-c", "/usr/local/libexec/focal-files-fixture acl && exec /usr/sbin/sshd -D -e"]
+CMD ["sh", "-c", "/usr/local/libexec/focal-files-fixture acl; exec /usr/sbin/sshd -D -e"]
