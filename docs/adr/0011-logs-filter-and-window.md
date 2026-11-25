@@ -105,6 +105,11 @@ until を省略したら `--until` を渡さない（現在時刻で補わない
 since は until から logs の既定の期間（30m）を引いた点にする。until が期間なら since も期間
 （`--until 2h` → `--since=-150m --until=-2h`）、until が時刻なら since も時刻。
 
+until が時刻のときは、until と Focal の現在時刻のうち早い方から 30m を引く（`min(until, now) − 30m`）。
+until が未来でも since は今から 30m 前になり、`since_in_future` にはならない。「今日の終わりまで」のように
+未来の until を指定した要求は、直近 30m から until までを読む。until が期間のときは未来になりえないので、
+上の規則のままである。
+
 この since は `max_since` まで縮めず、指定された since と同じく `since_above_max` で拒否する。
 since を省略した従来の要求は既定値を上限まで縮めるが、そちらは窓の終わりが「今」で、縮めても
 「直近の範囲」という問いは変わらない。until を指定した要求で縮めると、呼び出し元が決めた終わりに対して
@@ -168,6 +173,13 @@ since を省略した従来の要求は既定値を上限まで縮めるが、�
   `covered_from` がごく最近になる
 - 相対の指定はリモートの時計、時刻を含む指定は Focal の時計を基準にする。両者がずれていると、
   時刻での指定はその分ずれた範囲を読む
-- 既存のテストのうち、`TestLogsHoldsOnlyTypedParameters`（`Logs` のフィールド一覧）、CLI の
-  `TestOperationUsage`（logs の使い方の文字列）、MCP の `TestSchemasExposeOnlyTypedParameters`
-  （`inspect_logs` の引数一覧）は、足した引数とフィールドの分だけ期待値を増やした
+- 既存のテストのうち、次のものは足した引数とフィールドの分だけ期待値を増やした:
+  `TestLogsHoldsOnlyTypedParameters`（`Logs` のフィールド一覧）、CLI の `TestOperationUsage`（logs の使い方の
+  文字列）、MCP の `TestSchemasExposeOnlyTypedParameters`（`inspect_logs` の引数一覧）、
+  `TestEnvelopeEncodeOmitsEmptyOptionalFields`（省略されるキーに `items`）、`internal/vo/vo_test.go` の
+  注入入力の表（`ParseTimestamp`・`ParseCountBy`）、`TestFactoryArgvCarriesNoShellSyntax` の呼び出し元由来の
+  token（`100000`）
+- 利用者から見える文言が変わる: logs の `--since` のヘルプ文（RFC 3339 も受けることを書いた）、MCP の
+  `inspect_logs` の `since` の説明（同じ）、logs のフラグを誤ったときのエラーの `allowed` に出る使い方の文字列
+  （`focal HOST logs SERVICE [--since VALUE] [--until VALUE] [--lines VALUE] [--grep VALUE] [--grep-regex VALUE]
+  [--count-by VALUE]`）。kernel のヘルプ文と使い方の文字列は変わらない

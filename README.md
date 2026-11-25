@@ -64,7 +64,8 @@ journalctl -u UNIT --since=@SECONDS  [--until=@SECONDS]  -n N --reverse --no-pag
 ```
 
 - `--until` だけを指定したときの since は、until から既定の `30m` を引いた点です（`--until 2h` なら
-  `--since=-150m --until=-2h`、until が時刻なら since も時刻）。
+  `--since=-150m --until=-2h`、until が時刻なら since も時刻）。until が未来の時刻なら、since は
+  今から `30m` 前になります。
 - `--grep` / `--grep-regex` / `--count-by` のどれかを使うと、`-n` は `--lines` ではなく走査上限の
   `100000` になります。検索語・正規表現はリモートに渡しません（journalctl の `--grep` も使いません）。
   読み戻したエントリに Focal 側で適用します。

@@ -130,8 +130,9 @@ func logsRelativeWindow(since, until, ceiling vo.Duration) (vo.Duration, vo.Dura
 
 // logsAbsoluteWindow resolves a window with at least one absolute bound. Both
 // bounds become instants on Focal's clock: a span is subtracted from now, and
-// a since left out is the default span before until. The checks are then
-// made on instants, to the second: since may not be after now, until may not
+// a since left out is the default span before until or now, whichever is
+// earlier, so it is never in the future even when until is. The checks are
+// then made on instants, to the second: since may not be after now, until may not
 // be before since (it may be after now), and since may not reach further back
 // than the ceiling allows — or 30d, vo.ParseDuration's own bound, when no
 // ceiling is configured.
@@ -163,9 +164,12 @@ func logsAbsoluteWindow(since, until journalBound, ceiling vo.Duration, now time
 			return vo.Timestamp{}, vo.Timestamp{}, err
 		}
 	default:
-		// Only an absolute until brings a request here without a since.
+		// Only an absolute until brings a request here without a since. The
+		// default span ends at until or at now, whichever is earlier: an
+		// until in the future still reads the latest 30m rather than a
+		// window that has not begun.
 		derived = true
-		if sinceAt, err = vo.TimestampFromUnix(untilAt.Unix() - logsDefaultSince.Seconds()); err != nil {
+		if sinceAt, err = vo.TimestampFromUnix(min(untilAt.Unix(), nowUnix) - logsDefaultSince.Seconds()); err != nil {
 			return vo.Timestamp{}, vo.Timestamp{}, err
 		}
 	}
@@ -173,7 +177,7 @@ func logsAbsoluteWindow(since, until journalBound, ceiling vo.Duration, now time
 	if sinceAt.Unix() > nowUnix {
 		return vo.Timestamp{}, vo.Timestamp{}, result.ValidationError(
 			"since_in_future",
-			fmt.Sprintf("since %s is later than now", logsSinceLabel(sinceAt, derived)),
+			fmt.Sprintf("since %s is later than now", sinceAt),
 			"since",
 			[]string{"an instant no later than now"},
 		)
@@ -203,13 +207,6 @@ func logsAbsoluteWindow(since, until journalBound, ceiling vo.Duration, now time
 // max_since is configured: the same 30d vo.ParseDuration holds a span to.
 var logsUncappedSince = journalMustDuration("30d")
 
-func logsSinceLabel(sinceAt vo.Timestamp, derived bool) string {
-	if derived {
-		return sinceAt.String() + " (the default " + logsDefaultSince.String() + " before until)"
-	}
-	return sinceAt.String()
-}
-
 func logsUntilBeforeSince(until, since string) *result.Error {
 	return result.ValidationError(
 		"until_before_since",
@@ -225,7 +222,7 @@ func logsUntilBeforeSince(until, since string) *result.Error {
 func logsDerivedSinceAboveMax(until string, ceiling vo.Duration) *result.Error {
 	return result.ValidationError(
 		"since_above_max",
-		fmt.Sprintf("since, taken as the default %s before until %s, reaches further back than the configured max_since of %s",
+		fmt.Sprintf("since, taken as the default %s before until %s (or before now, if that is earlier), reaches further back than the configured max_since of %s",
 			logsDefaultSince, until, ceiling),
 		"since",
 		[]string{"at most " + ceiling.String(), "or name since explicitly"},

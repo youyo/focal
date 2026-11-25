@@ -117,6 +117,16 @@ func TestLogsWindowArgv(t *testing.T) {
 			[]string{"--since=@1795577400", "--until=@1795579200"}, "200",
 		},
 		{
+			"absolute until in the future alone takes the default span before now",
+			Params{Until: "2026-11-25T15:00:00+09:00"},
+			[]string{"--since=@1795581000", "--until=@1795586400"}, "200",
+		},
+		{
+			"absolute until just past now alone still starts the default span before now",
+			Params{Until: "2026-11-25T14:00:01+09:00"},
+			[]string{"--since=@1795581000", "--until=@1795582801"}, "200",
+		},
+		{
 			"absolute since with grep scans",
 			Params{Since: "2026-11-25T09:00:00+09:00", Grep: "refused"},
 			[]string{"--since=@1795564800"}, "100000",
@@ -165,11 +175,6 @@ func TestLogsWindowRejects(t *testing.T) {
 			"until_before_since", "until",
 		},
 		{"absolute since in the future", Params{Since: "2026-11-25T14:00:01+09:00"}, "since_in_future", "since"},
-		{
-			"until alone so far ahead that the default since is in the future",
-			Params{Until: "2026-11-25T15:00:00+09:00"},
-			"since_in_future", "since",
-		},
 		{"absolute since one second past max_since", Params{Since: "2026-11-24T13:59:59+09:00"}, "since_above_max", "since"},
 		{"relative since past max_since with an absolute until", Params{Since: "25h", Until: "2026-11-25T13:00:00+09:00"}, "since_above_max", "since"},
 		{"relative until whose default since passes max_since", Params{Until: "24h"}, "since_above_max", "since"},
