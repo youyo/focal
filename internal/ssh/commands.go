@@ -1,6 +1,9 @@
 package ssh
 
 import (
+	"path"
+	"strings"
+
 	"github.com/youyo/focal/internal/policy"
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/vo"
@@ -265,4 +268,60 @@ func KernelLogsCommand(p policy.Policy, since vo.Duration, lines vo.LineLimit) (
 		lit("--no-pager"),
 		lit("--output=short-iso"),
 	)
+}
+
+// FilesCommands builds the two commands of one files request (ADR 0012), both
+// from the one vo.FilesPath it is given, so the directory whose path was
+// checked and the directory that is listed cannot be two different values.
+//
+// check is ls -d -n -b --time-style=full-iso followed by every leading part of
+// the path, from "/" down to the directory itself (vo.FilesPath.Chain). -d
+// reports each argument as itself, not its contents; ls lstat()s each one, so
+// a symlink anywhere on the path shows up as a link. -n prints owners as
+// numbers, so the answer does not depend on name resolution on the host.
+// internal/operation reads the answer only to refuse: the listing runs only
+// when every directory above the target is owned by root and writable by no
+// one else.
+//
+// list is ls -A -b -g -o --time-style=full-iso --block-size=1 on the directory
+// itself. -A leaves out "." and "..", the latter being the parent's metadata;
+// -b escapes every byte of a name that could break a line or a column; -g and
+// -o drop the owner and group columns, which nobody asked for; the time style
+// and --block-size=1 pin the date and the size column against the host's
+// locale and its BLOCK_SIZE / LS_BLOCK_SIZE variables. There is no -R.
+//
+// dir is checked again here, beyond what vo.ParseFilesPath already did: the
+// zero value is refused, and so is "/" and anything not absolute or not in
+// path.Clean form, so a FilesPath that reached this function by some way other
+// than the parser still cannot name "..".
+func FilesCommands(p policy.Policy, dir vo.FilesPath) (check, list Command, err *result.Error) {
+	s := dir.String()
+	chain := dir.Chain()
+	if dir.IsZero() || s == "/" || !strings.HasPrefix(s, "/") || path.Clean(s) != s || len(chain) < 2 || chain[len(chain)-1] != s {
+		return Command{}, Command{}, result.ValidationError(
+			"invalid_path",
+			"the files path was not matched against the allow list",
+			"path",
+			[]string{"a path accepted by vo.ParseFilesPath"},
+		)
+	}
+	checkArgs := []argToken{lit("-d"), lit("-n"), lit("-b"), lit("--time-style=full-iso")}
+	for _, part := range chain {
+		checkArgs = append(checkArgs, val(part))
+	}
+	if check, err = newCommand(p, "ls", checkArgs...); err != nil {
+		return Command{}, Command{}, err
+	}
+	if list, err = newCommand(p, "ls",
+		lit("-A"),
+		lit("-b"),
+		lit("-g"),
+		lit("-o"),
+		lit("--time-style=full-iso"),
+		lit("--block-size=1"),
+		val(s),
+	); err != nil {
+		return Command{}, Command{}, err
+	}
+	return check, list, nil
 }

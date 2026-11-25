@@ -122,3 +122,15 @@ ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=@1
 
 # KernelLogsCommand
 ssh -n -T -o BatchMode=yes -- example.com journalctl -k --since=-1h -n 200 --reverse --no-pager --output=short-iso
+
+# FilesCommands/check
+ssh -n -T -o BatchMode=yes -- example.com ls -d -n -b --time-style=full-iso / /var /var/log /var/log/nginx
+
+# FilesCommands/list
+ssh -n -T -o BatchMode=yes -- example.com ls -A -b -g -o --time-style=full-iso --block-size=1 /var/log/nginx
+
+# FilesCommands/check shallow
+ssh -n -T -o BatchMode=yes -- example.com ls -d -n -b --time-style=full-iso / /srv
+
+# FilesCommands/list shallow
+ssh -n -T -o BatchMode=yes -- example.com ls -A -b -g -o --time-style=full-iso --block-size=1 /srv

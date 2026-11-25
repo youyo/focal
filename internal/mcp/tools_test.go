@@ -14,6 +14,7 @@ import (
 
 	"github.com/youyo/focal/internal/operation"
 	"github.com/youyo/focal/internal/result"
+	"github.com/youyo/focal/internal/vo"
 )
 
 // TestPackageDoesNotImportSSH is the import boundary this package is built
@@ -82,12 +83,16 @@ func TestToolNamesAreDerivedFromOperationNames(t *testing.T) {
 // tool, or declares a tool for a name internal/operation cannot build.
 func TestToolSpecsCoverEveryOperation(t *testing.T) {
 	registry := operation.NewRegistry(nil)
+	list, listErr := vo.ParseFilesAllowList([]string{"/var/log"})
+	if listErr != nil {
+		t.Fatalf("vo.ParseFilesAllowList: %v", listErr)
+	}
 	for name := range toolSpecs {
-		if _, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx"}); err != nil {
+		if _, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx", Path: "/var/log", FilesAllowList: list}); err != nil {
 			t.Errorf("operation %q has a tool but cannot be built: %v", name, err)
 		}
 	}
-	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "package", "logs", "kernel", "inspect"} {
+	for _, name := range []string{"system", "cpu", "memory", "storage", "network", "processes", "service", "package", "logs", "kernel", "inspect", "files"} {
 		if _, ok := toolSpecs[name]; !ok {
 			t.Errorf("operation %q has no tool", name)
 		}
@@ -97,11 +102,13 @@ func TestToolSpecsCoverEveryOperation(t *testing.T) {
 // TestSchemasExposeOnlyTypedParameters is the security shape of this package
 // stated as an assertion: what an agent may choose is a host, a login user, a
 // registered key alias and the operation's own typed inputs. A property named
-// anything else — a command, an argv, a path, an ssh option — would be a way
-// to widen focal's surface from the wire, so the check is against a closed
-// list rather than against a list of forbidden names.
+// anything else — a command, an argv, an ssh option — would be a way to widen
+// focal's surface from the wire, so the check is against a closed list rather
+// than against a list of forbidden names. The one path an agent may name is
+// files' directory, which is matched against the administrator's
+// operations.files.paths before anything reaches a host.
 func TestSchemasExposeOnlyTypedParameters(t *testing.T) {
-	url, _ := serverFor(t, "operations:\n  kernel:\n    enabled: true\n", Options{})
+	url, _ := serverFor(t, "operations:\n  kernel:\n    enabled: true\n  files:\n    enabled: true\n    paths: [/var/log]\n", Options{})
 
 	allowed := map[string][]string{
 		"inspect":           {"host", "user", "identity", "transport"},
@@ -115,6 +122,7 @@ func TestSchemasExposeOnlyTypedParameters(t *testing.T) {
 		"inspect_package":   {"host", "user", "identity", "transport", "package"},
 		"inspect_logs":      {"host", "user", "identity", "transport", "service", "since", "until", "lines", "grep", "grep-regex", "count-by"},
 		"inspect_kernel":    {"host", "user", "identity", "transport", "since", "lines"},
+		"inspect_files":     {"host", "user", "identity", "transport", "path"},
 	}
 
 	for name, schema := range toolSchemas(t, url) {
@@ -201,6 +209,7 @@ func TestArgsCarryTheirValuesIntoParams(t *testing.T) {
 			},
 		},
 		{"kernel", kernelArgs{Since: "1h"}, operation.Params{Since: "1h"}},
+		{"files", filesArgs{Path: "/var/log/nginx"}, operation.Params{Path: "/var/log/nginx"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

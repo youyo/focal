@@ -43,6 +43,7 @@ var allowedCommandFactories = []string{
 	"LogsSinceEpochCommand",
 	"LogsEpochWindowCommand",
 	"KernelLogsCommand",
+	"FilesCommands",
 }
 
 // The asserts below read this package's own source with go/ast rather than

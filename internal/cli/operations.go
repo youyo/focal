@@ -44,6 +44,7 @@ func untilField(p *operation.Params) *string       { return &p.Until }
 func grepField(p *operation.Params) *string        { return &p.Grep }
 func grepRegexField(p *operation.Params) *string   { return &p.GrepRegex }
 func countByField(p *operation.Params) *string     { return &p.CountBy }
+func pathField(p *operation.Params) *string        { return &p.Path }
 
 // operationSpecs is the CLI's dispatch table: exactly the operation names
 // focal offers, each with the inputs it takes. A name absent from this table is
@@ -80,6 +81,9 @@ var operationSpecs = map[string][]argSpec{
 		{Flag: "grep", Usage: "return only entries containing this text (case-sensitive); entries are matched by focal, not on the host", Field: grepField},
 		{Flag: "grep-regex", Usage: "return only entries matching this RE2 regular expression; not with --grep", Field: grepRegexField},
 		{Flag: "count-by", Usage: "count the matching entries per hour or day instead of returning them", Field: countByField},
+	},
+	"files": {
+		{Usage: "PATH", Field: pathField},
 	},
 	"kernel": {
 		{Flag: "since", Usage: "how far back to read, e.g. 30m or 24h", Field: sinceField},

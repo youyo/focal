@@ -287,6 +287,7 @@ func (a *app) dispatch(cmd *cobra.Command, g *globals, args []string) *cliError 
 		return paramsErr
 	}
 	params.MaxSince, params.MaxLines = opCfg.MaxSince(), opCfg.MaxLines()
+	params.FilesAllowList = opCfg.FilesAllowList()
 
 	registry := operation.NewRegistry(func(n string) bool {
 		op, ok := cfg.Operation(n)

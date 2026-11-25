@@ -86,3 +86,9 @@
 
 # KernelLogsCommand
 'journalctl' '-k' '--since=-1h' '-n' '200' '--reverse' '--no-pager' '--output=short-iso'
+
+# FilesCommands/check
+'ls' '-d' '-n' '-b' '--time-style=full-iso' '/' '/var' '/var/log' '/var/log/nginx'
+
+# FilesCommands/list
+'ls' '-A' '-b' '-g' '-o' '--time-style=full-iso' '--block-size=1' '/var/log/nginx'

@@ -18,7 +18,7 @@ import (
 // declaration and this slice is the test's independent expectation of it.
 var allOperations = []string{
 	"system", "cpu", "memory", "storage", "network",
-	"processes", "service", "package", "logs", "kernel", "inspect",
+	"processes", "service", "package", "logs", "kernel", "inspect", "files",
 }
 
 // journalOperations are the operations that read the system journal. They are

@@ -58,7 +58,7 @@ func NewRegistry(enabled EnabledFunc) Registry {
 // Enabled reports whether name is turned on for this installation.
 func (r Registry) Enabled(name string) bool { return r.enabled(name) }
 
-// Params carries every caller-supplied value across all eleven operations. A
+// Params carries every caller-supplied value across all twelve operations. A
 // registry row's builder reads only the fields the operation it builds
 // actually takes; CLI and MCP fill in whichever of these their request
 // named and leave the rest at the zero value.
@@ -85,6 +85,12 @@ type Params struct {
 	CountBy     string
 	MaxSince    vo.Duration
 	MaxLines    vo.LineLimit
+	// Path is the directory a files request names, as the caller sent it.
+	Path string
+	// FilesAllowList is the administrator's operations.files.paths, already
+	// validated by internal/config. CLI and MCP copy it here from the
+	// configuration without naming its type; only the files row reads it.
+	FilesAllowList vo.FilesAllowList
 }
 
 // registryBuilder turns Params into one Operation. It receives the Registry
@@ -93,7 +99,7 @@ type Params struct {
 // would use.
 type registryBuilder func(r Registry, params Params) (Operation, *result.Error)
 
-// registryTable is the single row set this package declares: Focal's eleven
+// registryTable is the single row set this package declares: Focal's twelve
 // operation names, each paired with the one way to build it. registry_test.go
 // fails if this set and internal/policy's declared capabilities ever
 // diverge.
@@ -167,6 +173,13 @@ var registryTable = map[string]registryBuilder{
 		return NewKernel(since, lines, params.MaxSince, params.MaxLines)
 	},
 	"inspect": func(r Registry, _ Params) (Operation, *result.Error) { return NewInspect(r), nil },
+	"files": func(_ Registry, params Params) (Operation, *result.Error) {
+		dir, err := vo.ParseFilesPath(params.Path, params.FilesAllowList)
+		if err != nil {
+			return nil, err
+		}
+		return NewFiles(dir), nil
+	},
 }
 
 // parseOptionalDuration and parseOptionalLineLimit are how the logs and

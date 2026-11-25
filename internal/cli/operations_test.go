@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/youyo/focal/internal/operation"
+	"github.com/youyo/focal/internal/vo"
 )
 
 // TestOperationSpecs_MatchesFocalsOperations is the drift check on the CLI's
@@ -14,7 +15,7 @@ import (
 // here rather than silently making the operation unreachable from the CLI.
 func TestOperationSpecs_MatchesFocalsOperations(t *testing.T) {
 	want := []string{
-		"cpu", "inspect", "kernel", "logs", "memory",
+		"cpu", "files", "inspect", "kernel", "logs", "memory",
 		"network", "package", "processes", "service", "storage", "system",
 	}
 	if got := operationNames(); !slices.Equal(got, want) {
@@ -27,11 +28,16 @@ func TestOperationSpecs_MatchesFocalsOperations(t *testing.T) {
 // caught here rather than as an unknown_operation at runtime.
 func TestOperationSpecs_AllBuild(t *testing.T) {
 	registry := operation.NewRegistry(nil)
+	list, listErr := vo.ParseFilesAllowList([]string{"/var/log"})
+	if listErr != nil {
+		t.Fatalf("vo.ParseFilesAllowList: %v", listErr)
+	}
 	for _, name := range operationNames() {
 		t.Run(name, func(t *testing.T) {
 			// Every operation that takes a caller value takes at most one
-			// required one, and "nginx" is accepted for each of them.
-			op, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx"})
+			// required one: "nginx" is accepted for each name, and
+			// /var/log for files against a list that holds it.
+			op, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx", Path: "/var/log", FilesAllowList: list})
 			if err != nil {
 				t.Fatalf("build %s: %v", name, err)
 			}
@@ -50,6 +56,24 @@ func TestParseOperationArgs(t *testing.T) {
 		want   operation.Params
 		reject bool
 	}{
+		{
+			name: "files takes one positional path",
+			op:   "files",
+			argv: []string{"/var/log/nginx"},
+			want: operation.Params{Path: "/var/log/nginx"},
+		},
+		{
+			name:   "files without a path",
+			op:     "files",
+			argv:   []string{},
+			reject: true,
+		},
+		{
+			name:   "files takes no flags",
+			op:     "files",
+			argv:   []string{"/var/log", "--recursive"},
+			reject: true,
+		},
 		{
 			name: "logs takes a positional unit and two flags",
 			op:   "logs",

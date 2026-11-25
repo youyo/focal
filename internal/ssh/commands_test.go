@@ -1,8 +1,10 @@
 package ssh
 
 import (
+	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/youyo/focal/internal/policy"
@@ -22,6 +24,14 @@ type factoryCase struct {
 	args    []string
 }
 
+// factoryName is the catalogue entry this row exercises. A factory that hands
+// back more than one Command has a row, and a golden block, for each of them,
+// named "Factory/which"; the part before the slash is the factory.
+func (tc factoryCase) factoryName() string {
+	name, _, _ := strings.Cut(tc.name, "/")
+	return name
+}
+
 // factoryCases builds every exported factory once. The same table feeds the
 // ssh-level golden file in argv_test.go, so a factory that is added here is
 // also reviewable as the complete command line it produces.
@@ -39,6 +49,8 @@ func factoryCases(t *testing.T) []factoryCase {
 	scan := mustLineLimit(t, "100000")
 	from := mustTimestamp(t, "2026-11-20T09:00:00+09:00")
 	to := mustTimestamp(t, "2026-11-21T09:00:00+09:00")
+	filesCheck, filesList := mustFilesCommands(t, p, mustFilesPath(t, "/var/log/nginx"))
+	shallowCheck, shallowList := mustFilesCommands(t, p, mustFilesPath(t, "/srv"))
 
 	return []factoryCase{
 		{"UptimeCommand", must(UptimeCommand(p)), "uptime", nil},
@@ -79,6 +91,18 @@ func factoryCases(t *testing.T) []factoryCase {
 		{"KernelLogsCommand", must(KernelLogsCommand(p, kernelSince, lines)), "journalctl", []string{
 			"-k", "--since=-1h", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
 		}},
+		{"FilesCommands/check", filesCheck, "ls", []string{
+			"-d", "-n", "-b", "--time-style=full-iso", "/", "/var", "/var/log", "/var/log/nginx",
+		}},
+		{"FilesCommands/list", filesList, "ls", []string{
+			"-A", "-b", "-g", "-o", "--time-style=full-iso", "--block-size=1", "/var/log/nginx",
+		}},
+		{"FilesCommands/check shallow", shallowCheck, "ls", []string{
+			"-d", "-n", "-b", "--time-style=full-iso", "/", "/srv",
+		}},
+		{"FilesCommands/list shallow", shallowList, "ls", []string{
+			"-A", "-b", "-g", "-o", "--time-style=full-iso", "--block-size=1", "/srv",
+		}},
 	}
 }
 
@@ -102,15 +126,72 @@ func TestFactoryArgvIsExact(t *testing.T) {
 // and to allowedCommandFactories but never exercised here would otherwise ship
 // an argv nobody wrote down.
 func TestFactoryCasesCoverTheCatalogue(t *testing.T) {
+	if problems := factoryRowProblems(factoryCases(t)); len(problems) > 0 {
+		t.Errorf("factoryCases rows:\n%s", strings.Join(problems, "\n"))
+	}
 	var covered []string
 	for _, tc := range factoryCases(t) {
-		covered = append(covered, tc.name)
+		if name := tc.factoryName(); !slices.Contains(covered, name) {
+			covered = append(covered, name)
+		}
 	}
 	want := slices.Clone(allowedCommandFactories)
 	sort.Strings(covered)
 	sort.Strings(want)
 	if !slices.Equal(covered, want) {
 		t.Errorf("factoryCases covers\n %q\nallowedCommandFactories lists\n %q", covered, want)
+	}
+}
+
+// multiCommandFactories names the factories that hand back more than one
+// Command, with the parts each must have at least one row for. Every other
+// factory has exactly one row, named after it.
+var multiCommandFactories = map[string][]string{
+	"FilesCommands": {"check", "list"},
+}
+
+// factoryRowProblems checks the shape of the rows before they are reduced to
+// factory names: a factory outside multiCommandFactories has one row, named
+// exactly as the factory, and a factory inside it has at least one row for
+// each of its parts ("FilesCommands/check", "FilesCommands/check shallow").
+func factoryRowProblems(cases []factoryCase) []string {
+	rows := map[string][]string{}
+	for _, tc := range cases {
+		name, part, _ := strings.Cut(tc.name, "/")
+		rows[name] = append(rows[name], part)
+	}
+	var problems []string
+	for name, parts := range rows {
+		want, multi := multiCommandFactories[name]
+		if !multi {
+			if len(parts) != 1 || parts[0] != "" {
+				problems = append(problems, fmt.Sprintf("%s has rows %q, want exactly one named %s", name, parts, name))
+			}
+			continue
+		}
+		for _, w := range want {
+			if !slices.ContainsFunc(parts, func(p string) bool { return p == w || strings.HasPrefix(p, w+" ") }) {
+				problems = append(problems, fmt.Sprintf("%s has no row for its %s Command (rows %q)", name, w, parts))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// TestFactoryRowProblemsCatchesBadRows feeds the row check the two mistakes it
+// exists for.
+func TestFactoryRowProblemsCatchesBadRows(t *testing.T) {
+	cases := factoryCases(t)
+	duplicated := append(slices.Clone(cases), cases[0])
+	if len(factoryRowProblems(duplicated)) == 0 {
+		t.Errorf("a second row for %s was accepted", cases[0].name)
+	}
+	oneSided := slices.DeleteFunc(slices.Clone(cases), func(tc factoryCase) bool {
+		return strings.HasPrefix(tc.name, "FilesCommands/list")
+	})
+	if len(factoryRowProblems(oneSided)) == 0 {
+		t.Error("FilesCommands without a list row was accepted")
 	}
 }
 
@@ -166,12 +247,17 @@ func TestFactoriesDoNotNormaliseUnitNames(t *testing.T) {
 // and no token that came from a caller can be read as an option.
 func TestFactoryArgvCarriesNoShellSyntax(t *testing.T) {
 	callerSupplied := map[string]bool{
-		"nginx.service": true,
-		"libstdc++6":    true,
-		"30m":           true,
-		"1h":            true,
-		"200":           true,
-		"100000":        true,
+		"nginx.service":  true,
+		"libstdc++6":     true,
+		"30m":            true,
+		"1h":             true,
+		"200":            true,
+		"100000":         true,
+		"/":              true,
+		"/var":           true,
+		"/var/log":       true,
+		"/var/log/nginx": true,
+		"/srv":           true,
 	}
 	for _, tc := range factoryCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,6 +323,60 @@ func mustLineLimit(t *testing.T, s string) vo.LineLimit {
 		t.Fatalf("vo.ParseLineLimit(%q): %v", s, err)
 	}
 	return l
+}
+
+// mustFilesPath matches s against a list holding /var and /srv, the parents of
+// every path the tables here use.
+func mustFilesPath(t *testing.T, s string) vo.FilesPath {
+	t.Helper()
+	list, err := vo.ParseFilesAllowList([]string{"/var", "/srv"})
+	if err != nil {
+		t.Fatalf("vo.ParseFilesAllowList: %v", err)
+	}
+	p, err := vo.ParseFilesPath(s, list)
+	if err != nil {
+		t.Fatalf("vo.ParseFilesPath(%q): %v", s, err)
+	}
+	return p
+}
+
+func mustFilesCommands(t *testing.T, p policy.Policy, dir vo.FilesPath) (Command, Command) {
+	t.Helper()
+	check, list, err := FilesCommands(p, dir)
+	if err != nil {
+		t.Fatalf("FilesCommands(%q) rejected its own argument: %v", dir.String(), err)
+	}
+	return check, list
+}
+
+// TestFilesCommandsRefuseAPathThatWasNeverMatched pins the zero FilesPath: a
+// value that never went through vo.ParseFilesPath builds nothing.
+func TestFilesCommandsRefuseAPathThatWasNeverMatched(t *testing.T) {
+	check, list, err := FilesCommands(policy.Policy{}, vo.FilesPath{})
+	if err == nil {
+		t.Fatalf("FilesCommands accepted the zero FilesPath: %v %v", check.Args(), list.Args())
+	}
+	if !check.IsZero() || !list.IsZero() {
+		t.Error("a refused FilesCommands handed back a Command")
+	}
+}
+
+// TestFilesCommandsBuildBothFromOnePath pins that the check and the listing
+// name the same directory: the listing's one path argument is the check's
+// last.
+func TestFilesCommandsBuildBothFromOnePath(t *testing.T) {
+	dir := mustFilesPath(t, "/var/log/nginx")
+	check, list := mustFilesCommands(t, policy.Policy{}, dir)
+	checkArgs, listArgs := check.Args(), list.Args()
+	if got, want := checkArgs[len(checkArgs)-1], listArgs[len(listArgs)-1]; got != want || got != dir.String() {
+		t.Errorf("check ends with %q and the listing with %q, want both %q", got, want, dir.String())
+	}
+	if got, want := checkArgs[4:], dir.Chain(); !slices.Equal(got, want) {
+		t.Errorf("check arguments %q, want the chain %q", got, want)
+	}
+	if check.Sudo() != policy.SudoNever || list.Sudo() != policy.SudoNever {
+		t.Error("files commands carry a sudo mode from the zero policy")
+	}
 }
 
 func mustTimestamp(t *testing.T, s string) vo.Timestamp {

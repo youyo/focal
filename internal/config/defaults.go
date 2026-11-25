@@ -53,7 +53,8 @@ var lineStreamLimits = map[string]struct {
 }
 
 // defaultOperations is what Focal runs with when no config file exists: every
-// read-only inspection available, kernel details off, and — because no row
+// read-only inspection available, kernel details and directory listings off,
+// and — because no row
 // carries a sudo mode — no privilege anywhere. A config file can turn rows on
 // or off and narrow their sudo mode, but the set of operations that exist is
 // fixed here and in internal/policy's capability table.
@@ -76,4 +77,10 @@ var defaultOperations = []struct {
 	{"logs", true},
 	{"kernel", false},
 	{"inspect", true},
+	// files lists directories, so it is off until an administrator names
+	// which ones (operations.files.paths); there is no default list.
+	{"files", false},
 }
+
+// filesOperation is the one operation that takes operations.<name>.paths.
+const filesOperation = "files"

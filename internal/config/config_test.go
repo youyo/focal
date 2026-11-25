@@ -148,7 +148,7 @@ func TestLoadWithoutConfigFileUsesSafeDefaults(t *testing.T) {
 }
 
 // TestLoadWithoutConfigFileOffersEveryDeclaredOperation is the drift check on
-// the row count: an unconfigured Focal offers exactly the eleven operations it
+// the row count: an unconfigured Focal offers exactly the twelve operations it
 // implements, no more and no fewer.
 func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 	isolate(t)
@@ -156,7 +156,7 @@ func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 
 	want := []string{
 		"system", "cpu", "memory", "storage", "network",
-		"processes", "service", "package", "logs", "kernel", "inspect",
+		"processes", "service", "package", "logs", "kernel", "inspect", "files",
 	}
 	if got := len(cfg.operations); got != len(want) {
 		t.Errorf("Load() returned %d operations, want %d", got, len(want))
@@ -173,7 +173,7 @@ func TestLoadWithoutConfigFileOffersEveryDeclaredOperation(t *testing.T) {
 
 // TestLoadRejectsSudoAlwaysForEveryOperation carries issue #11's startup rule
 // through the administrator-facing path: writing `sudo: always` under any of
-// the eleven operations stops startup rather than quietly running unprivileged.
+// the twelve operations stops startup rather than quietly running unprivileged.
 func TestLoadRejectsSudoAlwaysForEveryOperation(t *testing.T) {
 	for _, d := range defaultOperations {
 		t.Run(d.name, func(t *testing.T) {

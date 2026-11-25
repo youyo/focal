@@ -224,6 +224,55 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.KernelLogsCommand(p, kernelSince, lines)) },
 			[]string{"200"},
 		},
+		{
+			// FilesCommands hands back two Commands. This row covers the
+			// check; TestFilesCommandsArgvCarriesNoDangerousBytes covers
+			// both, with the same byte rules.
+			"FilesCommands",
+			func(t *testing.T) ssh.Command { return filesCommandsForSecurityTest(t)[0] },
+			[]string{"/", "/var", "/var/log", "/var/log/nginx"},
+		},
+	}
+}
+
+// filesCommandsForSecurityTest builds the check and the listing for a path
+// three levels deep, from an allow list written the way an administrator would.
+func filesCommandsForSecurityTest(t *testing.T) []ssh.Command {
+	t.Helper()
+	list, err := vo.ParseFilesAllowList([]string{"/var/log", "/etc/nginx"})
+	if err != nil {
+		t.Fatalf("vo.ParseFilesAllowList: %v", err)
+	}
+	dir, err := vo.ParseFilesPath("/var/log/nginx", list)
+	if err != nil {
+		t.Fatalf("vo.ParseFilesPath: %v", err)
+	}
+	check, listing, buildErr := ssh.FilesCommands(policy.Policy{}, dir)
+	if buildErr != nil {
+		t.Fatalf("ssh.FilesCommands rejected its own accepted argument: %v", buildErr)
+	}
+	return []ssh.Command{check, listing}
+}
+
+// TestFilesCommandsArgvCarriesNoDangerousBytes applies
+// TestFactoryArgvCarriesNoDangerousBytes's rules to both Commands FilesCommands
+// returns, so the listing is held to them as the check is.
+func TestFilesCommandsArgvCarriesNoDangerousBytes(t *testing.T) {
+	caller := []string{"/", "/var", "/var/log", "/var/log/nginx"}
+	for _, cmd := range filesCommandsForSecurityTest(t) {
+		for _, tok := range append([]string{cmd.Program()}, cmd.Args()...) {
+			for i := 0; i < len(tok); i++ {
+				if isDangerousArgvByte(tok[i]) {
+					t.Errorf("token %q carries a byte at index %d (%q) that no argv token may carry", tok, i, tok[i:i+1])
+				}
+			}
+			if slices.Contains(caller, tok) && tok[0] == '-' {
+				t.Errorf("caller-supplied token %q starts with a hyphen", tok)
+			}
+		}
+		if cmd.Sudo() != policy.SudoNever {
+			t.Errorf("%s %v carries sudo %s", cmd.Program(), cmd.Args(), cmd.Sudo())
+		}
 	}
 }
 
