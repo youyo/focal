@@ -29,7 +29,7 @@ but not touch.**
 | `processes` | `ps -eo pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args`（フィルタは remote に渡さず Focal 側でローカルに適用） | never | `--name`, `--pid` |
 | `service` | `systemctl show UNIT --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent` | never | `SERVICE`（例: `nginx` → `nginx.service` に正規化） |
 | `package` | `rpm -q NAME`。終了コードが 0 以外なら続けて `dpkg-query -s NAME`（[ADR 0010](docs/adr/0010-package-operation.md)） | never | `NAME`（例: `procps`, `libstdc++6`） |
-| `logs` | `journalctl -u UNIT --since=-DURATION -n LINES --reverse --no-pager --output=short-iso` | auto（`never` へ変更可） | `SERVICE`, `--since`（既定 `30m`）, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`） |
+| `logs` | `journalctl -u UNIT --since=-DURATION -n LINES --reverse --no-pager --output=short-iso`（`--until` や絶対時刻を使うときの形は[下記](#logs-の絞り込み期間集計)） | auto（`never` へ変更可） | `SERVICE`, `--since`（既定 `30m`。期間か RFC 3339）, `--until`, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`）, `--grep`, `--grep-regex`, `--count-by` |
 | `kernel` | `journalctl -k --since=-DURATION -n LINES --reverse --no-pager --output=short-iso` | auto（`never` へ変更可）。**既定 disabled** | `--since`（既定 `1h`）, `--lines`（範囲内の最新 N 行（古い順に並べて返す）。既定 `200`） |
 | `inspect` | remote command なし。`system` / `cpu` / `memory` / `storage` / `network` / `processes` を最大3並列で実行し結果を合成する composite operation | never | なし |
 
@@ -38,6 +38,92 @@ sudo モードは `never` / `auto` / `always` の3値ですが、`always`（起�
 （1 / 13 / 77 / 126）が返ったときだけ `sudo -n` を付けて一度だけ再実行します。`inspect` を含め
 すべての operation の sudo capability は `internal/policy` が operation ごとに固定しており、config
 ファイルはその範囲を狭めることしかできません。
+
+### logs の絞り込み・期間・集計
+
+`logs` は、期間の終わり（`--until`）、絶対時刻での期間指定、エントリの絞り込み（`--grep` /
+`--grep-regex`）、時間ごとの件数の集計（`--count-by`）を受け付けます
+（[ADR 0011](docs/adr/0011-logs-filter-and-window.md)）。MCP の `inspect_logs` でも同じ名前の引数
+（`until` / `grep` / `grep-regex` / `count-by`）です。`kernel` はこれらを受け付けません。
+
+| 引数 | 受け付ける値 |
+|---|---|
+| `--since` | 期間（`30m`・`24h`・`7d` など。今からその分だけ前）か、RFC 3339 の時刻（`2026-11-20T09:00:00+09:00`、`2026-11-20T00:00:00Z`）。時刻は offset 必須で、小数秒は受け付けない |
+| `--until` | `--since` と同じ形。期間は「今からその分だけ前」。省略すると終わりを指定しない（`--until` を渡さない） |
+| `--grep TEXT` | この文字列を含むエントリだけを返す。固定文字列の部分一致で、大文字小文字を区別する。1〜256 バイト、制御文字は不可 |
+| `--grep-regex RE` | この正規表現（Go の RE2。後方参照・先読みは不可）に一致するエントリだけを返す。`--grep` とは同時に指定できない |
+| `--count-by hour\|day` | 一致したエントリを時（hour）か日（day）ごとに数え、`items` に返す。stdout は空になる |
+
+**実行されるコマンド。** 期間の両端がどちらも期間（相対）なら、リモートの時計を基準にそのまま渡します。
+どちらかが RFC 3339 の時刻なら、両端とも Focal を実行している側の時計で Unix 秒に直して渡します
+（期間の側は Focal の現在時刻から引きます）。
+
+```
+journalctl -u UNIT --since=-DURATION [--until=-DURATION] -n N --reverse --no-pager --output=short-iso
+journalctl -u UNIT --since=@SECONDS  [--until=@SECONDS]  -n N --reverse --no-pager --output=short-iso
+```
+
+- `--until` だけを指定したときの since は、until から既定の `30m` を引いた点です（`--until 2h` なら
+  `--since=-150m --until=-2h`、until が時刻なら since も時刻）。
+- `--grep` / `--grep-regex` / `--count-by` のどれかを使うと、`-n` は `--lines` ではなく走査上限の
+  `100000` になります。検索語・正規表現はリモートに渡しません（journalctl の `--grep` も使いません）。
+  読み戻したエントリに Focal 側で適用します。
+- 次の要求は実行前に拒否します: until が since より前、since が未来（until の未来は可）、since が
+  `max_since` より前（時刻のときは「Focal の現在時刻 − `max_since`」より前）。
+
+**絞り込みの単位はエントリです。** タイムスタンプで始まる先頭行と、それに続く継続行（改行を含む
+メッセージの 2 行目以降）で 1 エントリです。`--grep` / `--grep-regex` はエントリ全文、つまり先頭行の
+タイムスタンプ・ホスト名・識別子（`nginx[123]:` など）と継続行を含めた全体（行は改行でつなぐ）に
+対して一致を見ます。`-- No entries --` のようにタイムスタンプで始まらない行は、エントリとして数えず、
+一致の対象にもしません。stdout には一致したエントリのうち新しい側の `--lines` 件を、古い順に返します。
+
+**集計のバケット**は、リモートが出力した offset のまま、先頭行のタイムスタンプを時か日で切ったものです。
+offset はコロンなしの形にそろえます（`+09:00` で出力されたエントリも `+0900` のバケットに入ります）。
+
+| `--count-by` | バケットの表記 |
+|---|---|
+| `hour` | `2026-11-25T13+0900` |
+| `day` | `2026-11-25+0900` |
+
+集計は走査できた一致エントリをすべて数え（`--lines` には縛られません）、エントリのないバケットは出しません。
+
+**出力。** 上の引数（RFC 3339 の `--since` を含む）を 1 つでも使った要求は、`data` に次のキーを持ちます。
+値はすべて文字列です。どれも使わない要求の出力は従来どおりで、`data` も `items` も付きません。
+
+| キー | 意味 |
+|---|---|
+| `complete` | `"true"` / `"false"`。次のどれかなら `"false"`: 出力が `max_output` で切れた（truncated）、走査したエントリ数が `-n` に達した（範囲内にまだ古いエントリが残っている可能性がある）、timeout、ssh の失敗、journalctl の非 0 終了 |
+| `scanned_entries` | 走査したエントリ数 |
+| `matched_entries` | 一致したエントリ数（絞り込みなしなら `scanned_entries` と同じ） |
+| `covered_from` / `covered_to` | 走査できたエントリのうち最古・最新の先頭行のタイムスタンプ（リモートの表記のまま）。エントリがなければキー自体を出さない |
+
+`--count-by` の結果は `items` に、古いバケットから順に並びます。
+
+```json
+{"operation":"logs","host":"prod-web","status":"ok","exit_code":0,"duration_ms":412,
+ "data":{"complete":"true","covered_from":"2026-11-25T12:30:02+0900","covered_to":"2026-11-25T13:59:58+0900","matched_entries":"15","scanned_entries":"4210"},
+ "items":[{"bucket":"2026-11-25T12+0900","count":"3"},{"bucket":"2026-11-25T13+0900","count":"12"}]}
+```
+
+出力が切れたとき（truncated）は、途中で切れている可能性のある最古のエントリを 1 つ捨ててから数えます。
+`covered_from` を見れば、実際にどこまで遡って走査できたかがわかります。
+
+**十数日の調査には `max_since` を上げます。** 既定の `max_since` は `24h` で、これより前を since に
+指定すると拒否されます。設定できる上限は `30d` です。
+
+```yaml
+operations:
+  logs:
+    max_since: 14d
+```
+
+```sh
+focal prod-web logs nginx --since 2026-11-10T00:00:00+09:00 --until 2026-11-20T00:00:00+09:00 --grep "upstream timed out" --count-by day
+```
+
+**SSM transport では走査できる範囲が短くなります。** SSM は stdout を 24,000 文字で打ち切るため、
+`--grep` や `--count-by` で走査する要求はほぼ truncated になり、`covered_from` がごく最近の時刻に
+なります（`complete` は `"false"`）。新しい側から読むので、走査できるのは期間の終わり側の一部です。
 
 ## Requirements
 
@@ -359,6 +445,8 @@ services:
 ```json
 // inspect_logs
 {"host": "prod-web", "service": "nginx", "since": "30m", "lines": 200}
+// inspect_logs（絞り込みと集計。引数の意味は「logs の絞り込み・期間・集計」を参照）
+{"host": "prod-web", "service": "nginx", "since": "2026-11-20T09:00:00+09:00", "until": "1h", "grep-regex": "upstream (timed out|refused)", "count-by": "hour"}
 
 // inspect_package
 {"host": "prod-web", "package": "openssh-server"}
@@ -514,6 +602,9 @@ Agent が制御できるのは次の3つだけで、実際に実行される Lin
 - [0006. E2E テストは build tag 隔離 + docker compose + go-sdk クライアントで構成し CI 別ジョブで実行する](docs/adr/0006-e2e-test-strategy.md)
 - [0007. AWS SSM Run Command を第二の transport として追加する](docs/adr/0007-ssm-transport.md)
 - [0008. stdio で MCP を提供する `focal mcp` を追加し、`focal serve` の TCP 待ち受けでは token を必須にする](docs/adr/0008-stdio-transport-and-serve-auth-default.md)
+- [0009. journal は新しい側から取り、Focal 側でエントリ単位に古い順へ戻す](docs/adr/0009-journal-read-order.md)
+- [0010. package operation: rpm を先に試し、dpkg-query は終了コードだけで選ぶ](docs/adr/0010-package-operation.md)
+- [0011. logs の絞り込み・期間の終わりと絶対時刻・時間ごとの集計](docs/adr/0011-logs-filter-and-window.md)
 
 ## ROADMAP（v0.1 スコープ外）
 
