@@ -3,6 +3,7 @@ package operation
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/youyo/focal/internal/policy"
 	"github.com/youyo/focal/internal/result"
@@ -129,10 +130,24 @@ func journalEnvelope(name string, t vo.Target, out ssh.Output, execErr error) re
 // Logs reads one systemd unit's journal. It holds only the typed parameters a
 // request named — never a Command — so the argv is built in internal/ssh at
 // execution time and nowhere else.
+//
+// The window is held in one of two forms, never both. A window whose bounds
+// are both relative keeps them as spans on the remote clock, in since and
+// until; a window with an absolute bound has both bounds as instants on
+// Focal's clock, in sinceAt and untilAt, and since and until stay zero
+// (ADR 0011). A zero until or untilAt means the window is open at its end.
+// grep, grepRegex and countBy are applied by Focal to what comes back and are
+// never part of the argv.
 type Logs struct {
-	service vo.ServiceName
-	since   vo.Duration
-	lines   vo.LineLimit
+	service   vo.ServiceName
+	since     vo.Duration
+	lines     vo.LineLimit
+	until     vo.Duration
+	sinceAt   vo.Timestamp
+	untilAt   vo.Timestamp
+	grep      vo.LogPattern
+	grepRegex vo.LogRegex
+	countBy   vo.CountBy
 }
 
 // NewLogs builds a logs request. service is required; since and lines may be
@@ -142,24 +157,12 @@ type Logs struct {
 // caller that read the config file: this package takes them as arguments so
 // that the operation stays a plain typed request and internal/config keeps a
 // single reader. Either may be a zero value, meaning no ceiling was set.
+//
+// NewLogs builds the request every caller made before logs could filter: a
+// relative span and a line count. The registry's logs row builds the rest
+// through newLogs, with the same rules for these three.
 func NewLogs(service vo.ServiceName, since vo.Duration, lines vo.LineLimit, maxSince vo.Duration, maxLines vo.LineLimit) (Logs, *result.Error) {
-	if service.String() == "" {
-		return Logs{}, result.ValidationError(
-			"missing_service_name",
-			"logs requires a service name",
-			"service",
-			[]string{"a systemd unit name, for example nginx or docker.socket"},
-		)
-	}
-	resolvedSince, err := journalSince(since, logsDefaultSince, maxSince)
-	if err != nil {
-		return Logs{}, err
-	}
-	resolvedLines, err := journalLines(lines, journalDefaultLines, maxLines)
-	if err != nil {
-		return Logs{}, err
-	}
-	return Logs{service: service, since: resolvedSince, lines: resolvedLines}, nil
+	return newLogs(service, logsQuery{since: journalBound{span: since}}, lines, maxSince, maxLines, time.Time{})
 }
 
 // Name returns "logs".
@@ -169,15 +172,52 @@ func (o Logs) Name() string { return "logs" }
 // exec.go's normalizeUnitName — Focal's only normalization point — and parsed
 // again on the way out of it, so the name that reaches the factory is still a
 // vo.ServiceName rather than a string this file assembled.
+//
+// A request that uses none of what ADR 0011 added is answered exactly as
+// before, through journalEnvelope. Any other request is answered through
+// logsFilteredEnvelope, which also reports how much of the window was read.
 func (o Logs) Execute(ctx context.Context, ex ssh.Executor, t vo.Target, p policy.Policy) (result.Envelope, error) {
 	unit, err := vo.ParseServiceName(normalizeUnitName(o.service.String()))
 	if err != nil {
 		return result.Envelope{}, err
 	}
-	cmd, err := ssh.LogsCommand(p, unit, o.since, o.lines)
+	limit := o.lines
+	if o.scans() {
+		limit = logsScanLimit
+	}
+	cmd, err := o.command(p, unit, limit)
 	if err != nil {
 		return result.Envelope{}, err
 	}
 	out, execErr := ex.Execute(ctx, t, cmd)
-	return journalEnvelope(o.Name(), t, out, execErr), nil
+	if !o.extended() {
+		return journalEnvelope(o.Name(), t, out, execErr), nil
+	}
+	return o.filteredEnvelope(t, out, execErr, limit), nil
+}
+
+// command picks the one factory whose argv has the shape of this window.
+func (o Logs) command(p policy.Policy, unit vo.ServiceName, limit vo.LineLimit) (ssh.Command, *result.Error) {
+	switch {
+	case o.sinceAt.Unix() > 0 && o.untilAt.Unix() > 0:
+		return ssh.LogsEpochWindowCommand(p, unit, o.sinceAt, o.untilAt, limit)
+	case o.sinceAt.Unix() > 0:
+		return ssh.LogsSinceEpochCommand(p, unit, o.sinceAt, limit)
+	case o.until.Seconds() > 0:
+		return ssh.LogsRelativeWindowCommand(p, unit, o.since, o.until, limit)
+	default:
+		return ssh.LogsCommand(p, unit, o.since, limit)
+	}
+}
+
+// scans reports whether the request filters or counts entries, which makes
+// journalctl read up to logsScanLimit entries instead of the caller's lines.
+func (o Logs) scans() bool {
+	return o.grep.String() != "" || o.grepRegex.String() != "" || o.countBy.String() != ""
+}
+
+// extended reports whether the request uses anything ADR 0011 added: a
+// filter, a count, an until, or an absolute since.
+func (o Logs) extended() bool {
+	return o.scans() || o.until.Seconds() > 0 || o.sinceAt.Unix() > 0
 }

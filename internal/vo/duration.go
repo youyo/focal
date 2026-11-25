@@ -84,3 +84,31 @@ func ParseDuration(v string) (Duration, *result.Error) {
 	}
 	return Duration{s: v, secs: secs}, nil
 }
+
+// durationUnitsLargestFirst is the order DurationOfSeconds tries the units in.
+var durationUnitsLargestFirst = []byte{'d', 'h', 'm', 's'}
+
+// DurationOfSeconds builds a Duration for a span Focal computed itself rather
+// than one a caller wrote — a caller's span with a default added to it. The
+// result is written in the largest unit that divides the span exactly, so it
+// stays within the six digits ParseDuration accepts for any span up to 30d
+// that is a whole number of minutes, and it is always a string ParseDuration
+// would accept back. A span outside 1s..30d, or one that no unit can write in
+// six digits, is refused rather than rounded.
+func DurationOfSeconds(secs int64) (Duration, *result.Error) {
+	if secs < minDurationSecs || secs > maxDurationSecs {
+		return Duration{}, durationSpec.reject("must be between 1s and 30d")
+	}
+	for _, unit := range durationUnitsLargestFirst {
+		size := durationUnitSecs[unit]
+		if secs%size != 0 {
+			continue
+		}
+		magnitude := strconv.FormatInt(secs/size, 10)
+		if len(magnitude) > maxDurationDigits {
+			continue
+		}
+		return Duration{s: magnitude + string(unit), secs: secs}, nil
+	}
+	return Duration{}, durationSpec.reject("must be expressible in at most 6 digits of one unit")
+}

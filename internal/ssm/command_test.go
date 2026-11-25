@@ -40,6 +40,11 @@ func commandCases(t *testing.T) []commandCase {
 	kernelSince := mustDuration(t, "1h")
 	lines := mustLineLimit(t, "200")
 	pkg := mustPackageName(t, "libstdc++6")
+	windowSince := mustDuration(t, "150m")
+	windowUntil := mustDuration(t, "2h")
+	scan := mustLineLimit(t, "100000")
+	from := mustTimestamp(t, "2026-11-20T09:00:00+09:00")
+	to := mustTimestamp(t, "2026-11-21T09:00:00+09:00")
 
 	uptime := must(ssh.UptimeCommand(p))
 	systemctl := must(ssh.ServiceStatusCommand(p, unit))
@@ -68,6 +73,9 @@ func commandCases(t *testing.T) []commandCase {
 		{name: "RPMQueryCommand", cmd: must(ssh.RPMQueryCommand(p, pkg))},
 		{name: "DpkgStatusCommand", cmd: must(ssh.DpkgStatusCommand(p, pkg))},
 		{name: "LogsCommand", cmd: must(ssh.LogsCommand(p, unit, since, lines))},
+		{name: "LogsRelativeWindowCommand", cmd: must(ssh.LogsRelativeWindowCommand(p, unit, windowSince, windowUntil, scan))},
+		{name: "LogsSinceEpochCommand", cmd: must(ssh.LogsSinceEpochCommand(p, unit, from, scan))},
+		{name: "LogsEpochWindowCommand", cmd: must(ssh.LogsEpochWindowCommand(p, unit, from, to, lines))},
 		{name: "KernelLogsCommand", cmd: must(ssh.KernelLogsCommand(p, kernelSince, lines))},
 	}
 }
@@ -236,4 +244,13 @@ func mustLineLimit(t *testing.T, s string) vo.LineLimit {
 		t.Fatalf("vo.ParseLineLimit(%q): %v", s, err)
 	}
 	return l
+}
+
+func mustTimestamp(t *testing.T, s string) vo.Timestamp {
+	t.Helper()
+	v, err := vo.ParseTimestamp(s)
+	if err != nil {
+		t.Fatalf("vo.ParseTimestamp(%q): %v", s, err)
+	}
+	return v
 }

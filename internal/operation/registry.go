@@ -3,6 +3,7 @@ package operation
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/youyo/focal/internal/result"
 	"github.com/youyo/focal/internal/vo"
@@ -22,12 +23,26 @@ type EnabledFunc func(name string) bool
 // operation outside this file is ever constructed by naming its Go type
 // directly from another package.
 //
-// A Registry is a small value (one func field), passed by value rather than
+// A Registry is a small value (two func fields), passed by value rather than
 // by pointer: inspect holds one so it can build its own sub-operations
 // through the same Build and the same Enabled every top-level caller uses,
 // and copying it costs nothing.
 type Registry struct {
 	enabled EnabledFunc
+	// now is the clock a request with an absolute time is resolved against.
+	// It is read once per Build, never stored as an instant, so a Registry
+	// that lives as long as the MCP server answers with the time of each
+	// request. Nil means the system clock; tests in this package set it.
+	now func() time.Time
+}
+
+// clock returns the instant a Build is resolved at. It is the one place
+// Focal reads the system clock for an operation.
+func (r Registry) clock() time.Time {
+	if r.now == nil {
+		return time.Now()
+	}
+	return r.now()
 }
 
 // NewRegistry builds a Registry. A nil enabled treats every operation as
@@ -53,13 +68,21 @@ func (r Registry) Enabled(name string) bool { return r.enabled(name) }
 // ceilings, already vo-typed because they come from a validated
 // config.Config rather than from the wire, and a zero value there means no
 // ceiling was configured.
+//
+// Until, Grep, GrepRegex and CountBy are read by the logs row only, which
+// also reads Since as either a span or an RFC 3339 instant; kernel reads
+// Since as a span alone.
 type Params struct {
 	ProcessName string
 	PID         string
 	ServiceName string
 	PackageName string
 	Since       string
+	Until       string
 	Lines       string
+	Grep        string
+	GrepRegex   string
+	CountBy     string
 	MaxSince    vo.Duration
 	MaxLines    vo.LineLimit
 }
@@ -99,20 +122,38 @@ var registryTable = map[string]registryBuilder{
 		}
 		return NewPackage(name), nil
 	},
-	"logs": func(_ Registry, params Params) (Operation, *result.Error) {
+	"logs": func(r Registry, params Params) (Operation, *result.Error) {
 		service, err := vo.ParseServiceName(params.ServiceName)
 		if err != nil {
 			return nil, err
 		}
-		since, err := parseOptionalDuration(params.Since)
-		if err != nil {
+		var q logsQuery
+		if q.since, err = parseJournalBound(params.Since); err != nil {
+			return nil, err
+		}
+		if q.until, err = parseJournalBound(params.Until); err != nil {
 			return nil, err
 		}
 		lines, err := parseOptionalLineLimit(params.Lines)
 		if err != nil {
 			return nil, err
 		}
-		return NewLogs(service, since, lines, params.MaxSince, params.MaxLines)
+		if params.Grep != "" {
+			if q.grep, err = vo.ParseLogPattern(params.Grep); err != nil {
+				return nil, err
+			}
+		}
+		if params.GrepRegex != "" {
+			if q.grepRegex, err = vo.ParseLogRegex(params.GrepRegex); err != nil {
+				return nil, err
+			}
+		}
+		if params.CountBy != "" {
+			if q.countBy, err = vo.ParseCountBy(params.CountBy); err != nil {
+				return nil, err
+			}
+		}
+		return newLogs(service, q, lines, params.MaxSince, params.MaxLines, r.clock())
 	},
 	"kernel": func(_ Registry, params Params) (Operation, *result.Error) {
 		since, err := parseOptionalDuration(params.Since)

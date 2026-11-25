@@ -111,5 +111,14 @@ ssh -n -T -o BatchMode=yes -- example.com dpkg-query -s libstdc++6
 # LogsCommand
 ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --reverse --no-pager --output=short-iso
 
+# LogsRelativeWindowCommand
+ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-150m --until=-2h -n 100000 --reverse --no-pager --output=short-iso
+
+# LogsSinceEpochCommand
+ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=@1795132800 -n 100000 --reverse --no-pager --output=short-iso
+
+# LogsEpochWindowCommand
+ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=@1795132800 --until=@1795219200 -n 200 --reverse --no-pager --output=short-iso
+
 # KernelLogsCommand
 ssh -n -T -o BatchMode=yes -- example.com journalctl -k --since=-1h -n 200 --reverse --no-pager --output=short-iso

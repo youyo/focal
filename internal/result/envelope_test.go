@@ -60,7 +60,7 @@ func TestEnvelopeEncodeOmitsEmptyOptionalFields(t *testing.T) {
 		t.Fatalf("unmarshal: %v", jsonErr)
 	}
 
-	for _, key := range []string{"truncated", "stdout", "stderr", "data", "error", "parts"} {
+	for _, key := range []string{"truncated", "stdout", "stderr", "data", "items", "error", "parts"} {
 		if _, ok := decoded[key]; ok {
 			t.Fatalf("%s must be omitted when empty, got %s", key, got)
 		}
@@ -354,5 +354,37 @@ func TestEnvelopeErrorFieldIsReplaceable(t *testing.T) {
 	}
 	if decoded.Error.Code != "ssh_failed" {
 		t.Fatalf("error.code = %q, want %q", decoded.Error.Code, "ssh_failed")
+	}
+}
+
+// TestEnvelopeItemsEncodeAfterData pins where the list a counting request
+// reports appears, and its shape: every value a string, keys in a fixed
+// order, and the same field on a Part as on the Envelope.
+func TestEnvelopeItemsEncodeAfterData(t *testing.T) {
+	env := result.Envelope{
+		Operation: "logs",
+		Host:      "web01",
+		Status:    result.StatusOK,
+		Data:      map[string]string{"complete": "true"},
+		Items: []map[string]string{
+			{"count": "12", "bucket": "2026-11-25T13+0900"},
+			{"bucket": "2026-11-25T14+0900", "count": "3"},
+		},
+		Parts: []result.Part{{
+			Name:   "logs",
+			Status: result.StatusOK,
+			Items:  []map[string]string{{"bucket": "2026-11-25+0900", "count": "15"}},
+		}},
+	}
+	got, err := env.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want := `{"operation":"logs","host":"web01","status":"ok","exit_code":0,"duration_ms":0,` +
+		`"data":{"complete":"true"},` +
+		`"items":[{"bucket":"2026-11-25T13+0900","count":"12"},{"bucket":"2026-11-25T14+0900","count":"3"}],` +
+		`"parts":[{"name":"logs","status":"ok","exit_code":0,"duration_ms":0,"items":[{"bucket":"2026-11-25+0900","count":"15"}]}]}`
+	if string(got) != want {
+		t.Errorf("Encode()\n got: %s\nwant: %s", got, want)
 	}
 }

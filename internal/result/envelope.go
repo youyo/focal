@@ -37,7 +37,11 @@ type Part struct {
 	Stdout     string            `json:"stdout,omitempty"`
 	Stderr     string            `json:"stderr,omitempty"`
 	Data       map[string]string `json:"data,omitempty"`
-	Error      *Error            `json:"error,omitempty"`
+	// Items is a list of rows, each a small map of strings, for an answer
+	// that is a table rather than key/value pairs — logs --count-by reports
+	// one row per bucket here. Every other Part leaves it empty.
+	Items []map[string]string `json:"items,omitempty"`
+	Error *Error              `json:"error,omitempty"`
 	// Parts nests a composite operation's own sub-parts (e.g. inspect's
 	// system/cpu/memory/storage/network/processes). A leaf Part — the
 	// common case, one Command's outcome — leaves this empty.
@@ -63,8 +67,12 @@ type Envelope struct {
 	Stdout     string            `json:"stdout,omitempty"`
 	Stderr     string            `json:"stderr,omitempty"`
 	Data       map[string]string `json:"data,omitempty"`
-	Error      *Error            `json:"error,omitempty"`
-	Parts      []Part            `json:"parts,omitempty"`
+	// Items carries rows for the operations whose answer is a table; see
+	// Part.Items. It is omitted when empty, so no other operation's JSON
+	// changes because the field exists.
+	Items []map[string]string `json:"items,omitempty"`
+	Error *Error              `json:"error,omitempty"`
+	Parts []Part              `json:"parts,omitempty"`
 }
 
 // Encode marshals e as compact, single-line JSON with HTML escaping

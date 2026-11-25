@@ -648,3 +648,35 @@ func TestNewHandlerCanLeaveHostUnchecked(t *testing.T) {
 		t.Errorf("external Host with the check off: status = %d, want 200", got)
 	}
 }
+
+// TestLogsFilterArgumentsReachTheRegistry shows the arguments ADR 0011 added
+// travel from a tool call into the same registry the CLI uses: a well-formed
+// one reaches the runner, and a combination the registry refuses comes back
+// as its validation error without running anything.
+func TestLogsFilterArgumentsReachTheRegistry(t *testing.T) {
+	url, runner := serverFor(t, "", Options{})
+
+	res := callTool(t, url, "inspect_logs", map[string]any{
+		"host": "web", "service": "nginx", "until": "1h", "grep-regex": "re(set|fused)", "count-by": "hour",
+	})
+	if res.IsError {
+		t.Fatalf("call reported an error: %+v", toolErrorOf(t, res))
+	}
+	if len(runner.calls) != 1 || runner.calls[0].operation != "logs" {
+		t.Fatalf("runner calls = %+v, want one logs call", runner.calls)
+	}
+
+	res = callTool(t, url, "inspect_logs", map[string]any{
+		"host": "web", "service": "nginx", "grep": "a", "grep-regex": "b",
+	})
+	if got := toolErrorOf(t, res); got.Kind != result.KindValidation || got.Code != "conflicting_arguments" {
+		t.Errorf("grep with grep-regex: error = %+v, want conflicting_arguments", got)
+	}
+	res = callTool(t, url, "inspect_logs", map[string]any{"host": "web", "service": "nginx", "count-by": "week"})
+	if got := toolErrorOf(t, res); got.Code != "invalid_count_by" {
+		t.Errorf("count-by week: error = %+v, want invalid_count_by", got)
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("a refused call reached the runner: %+v", runner.calls)
+	}
+}

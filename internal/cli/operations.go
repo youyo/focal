@@ -40,6 +40,10 @@ func processNameField(p *operation.Params) *string { return &p.ProcessName }
 func pidField(p *operation.Params) *string         { return &p.PID }
 func sinceField(p *operation.Params) *string       { return &p.Since }
 func linesField(p *operation.Params) *string       { return &p.Lines }
+func untilField(p *operation.Params) *string       { return &p.Until }
+func grepField(p *operation.Params) *string        { return &p.Grep }
+func grepRegexField(p *operation.Params) *string   { return &p.GrepRegex }
+func countByField(p *operation.Params) *string     { return &p.CountBy }
 
 // operationSpecs is the CLI's dispatch table: exactly the operation names
 // focal offers, each with the inputs it takes. A name absent from this table is
@@ -70,8 +74,12 @@ var operationSpecs = map[string][]argSpec{
 	},
 	"logs": {
 		{Usage: "SERVICE", Field: serviceNameField},
-		{Flag: "since", Usage: "how far back to read, e.g. 30m or 24h", Field: sinceField},
+		{Flag: "since", Usage: "where the window starts: a span back from now, e.g. 30m or 24h, or an RFC 3339 instant, e.g. 2026-11-20T09:00:00+09:00", Field: sinceField},
+		{Flag: "until", Usage: "where the window ends, in the same forms as --since; open-ended when omitted", Field: untilField},
 		{Flag: "lines", Usage: "how many of the newest lines in the window to return, oldest first, e.g. 200", Field: linesField},
+		{Flag: "grep", Usage: "return only entries containing this text (case-sensitive); entries are matched by focal, not on the host", Field: grepField},
+		{Flag: "grep-regex", Usage: "return only entries matching this RE2 regular expression; not with --grep", Field: grepRegexField},
+		{Flag: "count-by", Usage: "count the matching entries per hour or day instead of returning them", Field: countByField},
 	},
 	"kernel": {
 		{Flag: "since", Usage: "how far back to read, e.g. 30m or 24h", Field: sinceField},

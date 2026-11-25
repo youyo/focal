@@ -22,6 +22,8 @@ var parsers = []parser{
 	{"ParseDuration", func(v string) (string, *result.Error) { d, err := vo.ParseDuration(v); return d.String(), err }},
 	{"ParseLineLimit", func(v string) (string, *result.Error) { l, err := vo.ParseLineLimit(v); return l.String(), err }},
 	{"ParsePID", func(v string) (string, *result.Error) { p, err := vo.ParsePID(v); return p.String(), err }},
+	{"ParseTimestamp", func(v string) (string, *result.Error) { ts, err := vo.ParseTimestamp(v); return ts.String(), err }},
+	{"ParseCountBy", func(v string) (string, *result.Error) { c, err := vo.ParseCountBy(v); return c.String(), err }},
 }
 
 // injectionInputs are the payloads no value object may ever accept. Shell
