@@ -55,6 +55,11 @@ var (
 	packageChars  = newCharSet("A-Za-z0-9._+-")
 	ipv6Chars     = newCharSet("0-9A-Fa-f:.")
 	durationChars = newCharSet("0-9dhms")
+	// filesPathChars is internal/ssh's argSpec set: a path the files
+	// operation matches is placed in a remote argv as it is, so it may hold
+	// nothing that set refuses.
+	filesPathChars = newCharSet("A-Za-z0-9_@+=:,./-")
+	slashOnly      = newCharSet("/")
 )
 
 // tokenSpec is the complete rule set one token must satisfy, stated
