@@ -214,7 +214,9 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 		},
 		{
 			"LogsEpochWindowCommand",
-			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.LogsEpochWindowCommand(p, unit, from, to, lines)) },
+			func(t *testing.T) ssh.Command {
+				return buildOrFail(t)(ssh.LogsEpochWindowCommand(p, unit, from, to, lines))
+			},
 			[]string{"nginx.service", "200"},
 		},
 		{

@@ -85,15 +85,30 @@ func (a processesArgs) params() operation.Params {
 	return operation.Params{ProcessName: a.Name, PID: itoa(a.PID)}
 }
 
+// logsArgs names its multi-word properties exactly as the CLI names the
+// flags, grep-regex and count-by, so one spelling serves both ways of calling
+// focal and the error field a refusal reports.
 type logsArgs struct {
 	hostArgs
-	Service string `json:"service" jsonschema:"the systemd unit whose journal to read, e.g. nginx or nginx.service"`
-	Since   string `json:"since,omitempty" jsonschema:"how far back to read, e.g. 30m or 24h"`
-	Lines   *int   `json:"lines,omitempty" jsonschema:"how many of the newest lines in the window to return, oldest first, e.g. 200"`
+	Service   string `json:"service" jsonschema:"the systemd unit whose journal to read, e.g. nginx or nginx.service"`
+	Since     string `json:"since,omitempty" jsonschema:"where the window starts: a span back from now, e.g. 30m or 24h, or an RFC 3339 instant, e.g. 2026-11-20T09:00:00+09:00"`
+	Until     string `json:"until,omitempty" jsonschema:"where the window ends, in the same forms as since; open-ended when omitted"`
+	Lines     *int   `json:"lines,omitempty" jsonschema:"how many of the newest lines in the window to return, oldest first, e.g. 200"`
+	Grep      string `json:"grep,omitempty" jsonschema:"return only entries containing this text (case-sensitive); entries are matched by focal, not on the host"`
+	GrepRegex string `json:"grep-regex,omitempty" jsonschema:"return only entries matching this RE2 regular expression; not with grep"`
+	CountBy   string `json:"count-by,omitempty" jsonschema:"hour or day: count the matching entries per bucket in items instead of returning them"`
 }
 
 func (a logsArgs) params() operation.Params {
-	return operation.Params{ServiceName: a.Service, Since: a.Since, Lines: itoa(a.Lines)}
+	return operation.Params{
+		ServiceName: a.Service,
+		Since:       a.Since,
+		Until:       a.Until,
+		Lines:       itoa(a.Lines),
+		Grep:        a.Grep,
+		GrepRegex:   a.GrepRegex,
+		CountBy:     a.CountBy,
+	}
 }
 
 type kernelArgs struct {

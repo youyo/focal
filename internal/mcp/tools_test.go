@@ -113,7 +113,7 @@ func TestSchemasExposeOnlyTypedParameters(t *testing.T) {
 		"inspect_processes": {"host", "user", "identity", "transport", "name", "pid"},
 		"inspect_service":   {"host", "user", "identity", "transport", "service"},
 		"inspect_package":   {"host", "user", "identity", "transport", "package"},
-		"inspect_logs":      {"host", "user", "identity", "transport", "service", "since", "lines"},
+		"inspect_logs":      {"host", "user", "identity", "transport", "service", "since", "until", "lines", "grep", "grep-regex", "count-by"},
 		"inspect_kernel":    {"host", "user", "identity", "transport", "since", "lines"},
 	}
 
@@ -188,6 +188,17 @@ func TestArgsCarryTheirValuesIntoParams(t *testing.T) {
 			"logs",
 			logsArgs{Service: "nginx", Since: "30m", Lines: &lines},
 			operation.Params{ServiceName: "nginx", Since: "30m", Lines: "200"},
+		},
+		{
+			"logs with a window, a filter and a count",
+			logsArgs{
+				Service: "nginx", Since: "2026-11-20T09:00:00+09:00", Until: "1h",
+				Grep: "connection refused", GrepRegex: "re(set|fused)", CountBy: "day",
+			},
+			operation.Params{
+				ServiceName: "nginx", Since: "2026-11-20T09:00:00+09:00", Until: "1h",
+				Grep: "connection refused", GrepRegex: "re(set|fused)", CountBy: "day",
+			},
 		},
 		{"kernel", kernelArgs{Since: "1h"}, operation.Params{Since: "1h"}},
 	}

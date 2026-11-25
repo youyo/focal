@@ -187,6 +187,55 @@ func TestLogs_DefaultsWhenFlagsOmitted(t *testing.T) {
 	}
 }
 
+// TestLogs_FilterFlagsReachTheArgvOnlyAsAWindow is the end-to-end check for
+// the arguments ADR 0011 added: the window reaches the remote argv, the text
+// a caller filters by does not, and the answer carries the data block.
+func TestLogs_FilterFlagsReachTheArgvOnlyAsAWindow(t *testing.T) {
+	withConfig(t, "")
+
+	rec := &sshtest.Recorder{}
+	rec.Respond(ssh.Output{Stdout: "2026-11-25T13:00:01+0900 web01 nginx[1]: connect() failed (111: Connection refused)\n" +
+		"2026-11-25T13:00:00+0900 web01 nginx[1]: started\n"}, nil)
+	res := runCLIWith(t, rec, "prod-web", "logs", "nginx", "--until", "1h", "--grep", "Connection refused")
+	if res.code != exitOK {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.code, res.stderr)
+	}
+	want := []string{"-u", "nginx.service", "--since=-90m", "--until=-1h", "-n", "100000", "--reverse", "--no-pager", "--output=short-iso"}
+	if got := res.calls[0].Command.Args(); !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	for _, arg := range res.calls[0].Command.Args() {
+		if strings.Contains(arg, "Connection") {
+			t.Fatalf("the grep text reached the argv as %q", arg)
+		}
+	}
+	var env result.Envelope
+	if err := json.Unmarshal([]byte(res.stdout), &env); err != nil {
+		t.Fatalf("stdout is not an envelope: %v\n%s", err, res.stdout)
+	}
+	if env.Stdout != "2026-11-25T13:00:01+0900 web01 nginx[1]: connect() failed (111: Connection refused)\n" {
+		t.Errorf("Stdout = %q, want the one matching entry", env.Stdout)
+	}
+	if env.Data["complete"] != "true" || env.Data["scanned_entries"] != "2" || env.Data["matched_entries"] != "1" {
+		t.Errorf("Data = %v, want complete with 2 scanned and 1 matched", env.Data)
+	}
+}
+
+func TestLogs_GrepAndGrepRegexTogetherAreRefused(t *testing.T) {
+	withConfig(t, "")
+
+	res := runCLI(t, "prod-web", "logs", "nginx", "--grep", "a", "--grep-regex", "b")
+	if res.code == exitOK {
+		t.Fatalf("exit code = 0, want a validation failure; stdout=%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr, "conflicting_arguments") {
+		t.Errorf("stderr = %s, want conflicting_arguments", res.stderr)
+	}
+	if len(res.calls) != 0 {
+		t.Errorf("recorded %d calls, want none", len(res.calls))
+	}
+}
+
 // TestTransport_DefaultsToSSH pins that an invocation naming no --transport
 // still resolves to ssh, so every existing call keeps behaving as it always
 // has.

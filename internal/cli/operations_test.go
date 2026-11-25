@@ -63,6 +63,30 @@ func TestParseOperationArgs(t *testing.T) {
 			want: operation.Params{ServiceName: "nginx", Since: "30m"},
 		},
 		{
+			name: "logs takes the window, filter and count flags",
+			op:   "logs",
+			argv: []string{
+				"nginx", "--since", "2026-11-20T09:00:00+09:00", "--until", "1h",
+				"--grep", "connection refused", "--grep-regex", "re(set|fused)", "--count-by", "hour",
+			},
+			want: operation.Params{
+				ServiceName: "nginx", Since: "2026-11-20T09:00:00+09:00", Until: "1h",
+				Grep: "connection refused", GrepRegex: "re(set|fused)", CountBy: "hour",
+			},
+		},
+		{
+			name:   "kernel takes no until",
+			op:     "kernel",
+			argv:   []string{"--until", "1h"},
+			reject: true,
+		},
+		{
+			name:   "kernel takes no grep",
+			op:     "kernel",
+			argv:   []string{"--grep", "oom"},
+			reject: true,
+		},
+		{
 			name: "kernel takes no positional argument",
 			op:   "kernel",
 			argv: []string{"--since", "1h", "--lines", "50"},
@@ -164,7 +188,7 @@ func TestParseOperationArgs_PassesValuesThroughUntouched(t *testing.T) {
 
 func TestOperationUsage(t *testing.T) {
 	got := operationUsage("logs", operationSpecs["logs"])
-	want := "focal HOST logs SERVICE [--since VALUE] [--lines VALUE]"
+	want := "focal HOST logs SERVICE [--since VALUE] [--until VALUE] [--lines VALUE] [--grep VALUE] [--grep-regex VALUE] [--count-by VALUE]"
 	if got != want {
 		t.Fatalf("usage = %q, want %q", got, want)
 	}
