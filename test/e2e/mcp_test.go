@@ -27,6 +27,7 @@ var expectedTools = []string{
 	"inspect_logs",
 	"inspect_memory",
 	"inspect_network",
+	"inspect_package",
 	"inspect_processes",
 	"inspect_service",
 	"inspect_storage",
@@ -91,6 +92,23 @@ func TestMCPToolsAndCall(t *testing.T) {
 		// independent of exactly which part carried it.
 		if !strings.Contains(strings.ToLower(text), "linux") {
 			t.Errorf("system output does not look like a Linux host:\n%s", text)
+		}
+	})
+
+	t.Run("inspect_package against the container", func(t *testing.T) {
+		res, err := session.CallTool(ctx, &sdk.CallToolParams{
+			Name:      "inspect_package",
+			Arguments: map[string]any{"host": targetHost, "package": "procps"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("inspect_package reported an error: %s", toolText(t, res))
+		}
+		env := decodeEnvelope(t, toolText(t, res))
+		if env.Status != "ok" || env.Data["manager"] != "dpkg" || env.Data["installed"] != "true" {
+			t.Errorf("envelope = %+v, want ok, manager=dpkg, installed=true", env)
 		}
 	})
 

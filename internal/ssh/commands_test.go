@@ -33,6 +33,7 @@ func factoryCases(t *testing.T) []factoryCase {
 	since := mustDuration(t, "30m")
 	kernelSince := mustDuration(t, "1h")
 	lines := mustLineLimit(t, "200")
+	pkg := mustPackageName(t, "libstdc++6")
 
 	return []factoryCase{
 		{"UptimeCommand", must(UptimeCommand(p)), "uptime", nil},
@@ -56,6 +57,8 @@ func factoryCases(t *testing.T) []factoryCase {
 			"show", "nginx.service", "--no-pager",
 			"--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent",
 		}},
+		{"RPMQueryCommand", must(RPMQueryCommand(p, pkg)), "rpm", []string{"-q", "libstdc++6"}},
+		{"DpkgStatusCommand", must(DpkgStatusCommand(p, pkg)), "dpkg-query", []string{"-s", "libstdc++6"}},
 		{"LogsCommand", must(LogsCommand(p, unit, since, lines)), "journalctl", []string{
 			"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
 		}},
@@ -98,7 +101,7 @@ func TestFactoryCasesCoverTheCatalogue(t *testing.T) {
 }
 
 // TestFactoriesCarryTheResolvedSudoMode states that the privilege of every
-// command still comes from the policy it was handed, now that there are twenty
+// command still comes from the policy it was handed, now that there are many
 // factories rather than one.
 func TestFactoriesCarryTheResolvedSudoMode(t *testing.T) {
 	for _, tc := range factoryCases(t) {
@@ -150,6 +153,7 @@ func TestFactoriesDoNotNormaliseUnitNames(t *testing.T) {
 func TestFactoryArgvCarriesNoShellSyntax(t *testing.T) {
 	callerSupplied := map[string]bool{
 		"nginx.service": true,
+		"libstdc++6":    true,
 		"30m":           true,
 		"1h":            true,
 		"200":           true,
@@ -189,6 +193,15 @@ func mustServiceName(t *testing.T, s string) vo.ServiceName {
 	name, err := vo.ParseServiceName(s)
 	if err != nil {
 		t.Fatalf("vo.ParseServiceName(%q): %v", s, err)
+	}
+	return name
+}
+
+func mustPackageName(t *testing.T, s string) vo.PackageName {
+	t.Helper()
+	name, err := vo.ParsePackageName(s)
+	if err != nil {
+		t.Fatalf("vo.ParsePackageName(%q): %v", s, err)
 	}
 	return name
 }

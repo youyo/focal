@@ -36,7 +36,7 @@ CLI (`internal/cli`) と MCP (`internal/mcp`) は同じ経路を通る。分岐�
    (`internal/operation/registry.go` の `registryTable`)。他パッケージが Operation の Go 型を
    直接名指しして構築することはない。
 2. `internal/vo` の `Parse*` — 呼び出し元由来の文字列はここを必ず通る（`ServiceName` /
-   `Duration` / `LineLimit` / `PID` / `ProcessName` / `Target`）。
+   `PackageName` / `Duration` / `LineLimit` / `PID` / `ProcessName` / `Target`）。
 3. `policy.Resolve(name, configured)` — operation ごとの capability（`internal/policy/capability.go`、
    Focal 自身のコード）と設定ファイルの権限昇格モードの交差。config は capability を**狭めることしか
    できず**、範囲外指定は黙って弱い設定に落ちるのではなく起動時エラーになる。

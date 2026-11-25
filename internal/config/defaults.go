@@ -72,6 +72,7 @@ var defaultOperations = []struct {
 	{"network", true},
 	{"processes", true},
 	{"service", true},
+	{"package", true},
 	{"logs", true},
 	{"kernel", false},
 	{"inspect", true},

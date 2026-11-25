@@ -66,6 +66,12 @@
 # ServiceStatusCommand
 'systemctl' 'show' 'nginx.service' '--no-pager' '--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent'
 
+# RPMQueryCommand
+'rpm' '-q' 'libstdc++6'
+
+# DpkgStatusCommand
+'dpkg-query' '-s' 'libstdc++6'
+
 # LogsCommand
 'journalctl' '-u' 'nginx.service' '--since=-30m' '-n' '200' '--reverse' '--no-pager' '--output=short-iso'
 

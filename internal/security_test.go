@@ -93,6 +93,15 @@ func mustServiceNameForSecurityTest(t *testing.T, s string) vo.ServiceName {
 	return v
 }
 
+func mustPackageNameForSecurityTest(t *testing.T, s string) vo.PackageName {
+	t.Helper()
+	v, err := vo.ParsePackageName(s)
+	if err != nil {
+		t.Fatalf("vo.ParsePackageName(%q): %v", s, err)
+	}
+	return v
+}
+
 func mustDurationForSecurityTest(t *testing.T, s string) vo.Duration {
 	t.Helper()
 	v, err := vo.ParseDuration(s)
@@ -134,6 +143,7 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 	t.Helper()
 	p := policy.Policy{}
 	unit := mustServiceNameForSecurityTest(t, "nginx.service")
+	pkg := mustPackageNameForSecurityTest(t, "libstdc++6")
 	since := mustDurationForSecurityTest(t, "30m")
 	kernelSince := mustDurationForSecurityTest(t, "1h")
 	lines := mustLineLimitForSecurityTest(t, "200")
@@ -160,6 +170,16 @@ func securityFactoryCalls(t *testing.T) []securityFactoryCall {
 			"ServiceStatusCommand",
 			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.ServiceStatusCommand(p, unit)) },
 			[]string{"nginx.service"},
+		},
+		{
+			"RPMQueryCommand",
+			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.RPMQueryCommand(p, pkg)) },
+			[]string{"libstdc++6"},
+		},
+		{
+			"DpkgStatusCommand",
+			func(t *testing.T) ssh.Command { return buildOrFail(t)(ssh.DpkgStatusCommand(p, pkg)) },
+			[]string{"libstdc++6"},
 		},
 		{
 			"LogsCommand",

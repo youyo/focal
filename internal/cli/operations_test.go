@@ -15,7 +15,7 @@ import (
 func TestOperationSpecs_MatchesFocalsOperations(t *testing.T) {
 	want := []string{
 		"cpu", "inspect", "kernel", "logs", "memory",
-		"network", "processes", "service", "storage", "system",
+		"network", "package", "processes", "service", "storage", "system",
 	}
 	if got := operationNames(); !slices.Equal(got, want) {
 		t.Fatalf("operation names = %v, want %v", got, want)
@@ -31,7 +31,7 @@ func TestOperationSpecs_AllBuild(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Every operation that takes a caller value takes at most one
 			// required one, and "nginx" is accepted for each of them.
-			op, err := registry.Build(name, operation.Params{ServiceName: "nginx"})
+			op, err := registry.Build(name, operation.Params{ServiceName: "nginx", PackageName: "nginx"})
 			if err != nil {
 				t.Fatalf("build %s: %v", name, err)
 			}
@@ -79,6 +79,18 @@ func TestParseOperationArgs(t *testing.T) {
 			op:   "service",
 			argv: []string{"nginx"},
 			want: operation.Params{ServiceName: "nginx"},
+		},
+		{
+			name: "package takes the package name positionally",
+			op:   "package",
+			argv: []string{"libstdc++6"},
+			want: operation.Params{PackageName: "libstdc++6"},
+		},
+		{
+			name:   "package without a name is refused",
+			op:     "package",
+			argv:   nil,
+			reject: true,
 		},
 		{
 			name: "system takes nothing",

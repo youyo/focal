@@ -52,6 +52,7 @@ var (
 	userChars     = newCharSet("A-Za-z0-9._-")
 	hostLabelChar = newCharSet("A-Za-z0-9_-")
 	serviceChars  = newCharSet("A-Za-z0-9:_.@-")
+	packageChars  = newCharSet("A-Za-z0-9._+-")
 	ipv6Chars     = newCharSet("0-9A-Fa-f:.")
 	durationChars = newCharSet("0-9dhms")
 )

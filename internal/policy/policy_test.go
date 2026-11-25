@@ -18,7 +18,7 @@ import (
 // declaration and this slice is the test's independent expectation of it.
 var allOperations = []string{
 	"system", "cpu", "memory", "storage", "network",
-	"processes", "service", "logs", "kernel", "inspect",
+	"processes", "service", "package", "logs", "kernel", "inspect",
 }
 
 // journalOperations are the operations that read the system journal. They are
@@ -132,7 +132,7 @@ func TestResolveAllowsAutoForJournalOperationsOnly(t *testing.T) {
 
 // TestResolveRejectsAlwaysForEveryOperation is issue #11's startup rule at the
 // point it is decided: no operation Focal declares may be configured to run
-// every command as root, so `sudo: always` is a startup error for all ten.
+// every command as root, so `sudo: always` is a startup error for all eleven.
 func TestResolveRejectsAlwaysForEveryOperation(t *testing.T) {
 	for _, name := range allOperations {
 		p, err := policy.Resolve(name, policy.SudoAlways)
