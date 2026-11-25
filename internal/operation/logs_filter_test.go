@@ -303,3 +303,14 @@ func TestLogsCountByEncodesItems(t *testing.T) {
 		t.Errorf("Encode() = %s, want no stdout for a count", body)
 	}
 }
+
+// TestLogsTruncatedAloneIsIncomplete isolates the max_output cut from every
+// other reason an answer can be incomplete: the command exited 0, nothing
+// failed, and the scan limit is far away, yet the cut means older entries in
+// the window were never read.
+func TestLogsTruncatedAloneIsIncomplete(t *testing.T) {
+	env := logsFilterRun(t, Params{Grep: "refused"}, ssh.Output{Stdout: logsFilterNewestFirst, Truncated: true, ExitCode: 0}, nil)
+	if got := env.Data["complete"]; got != "false" {
+		t.Errorf("complete = %q, want false for a truncated answer; Data = %v", got, env.Data)
+	}
+}
