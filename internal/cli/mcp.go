@@ -83,6 +83,7 @@ func (a *app) serveStdio(ctx context.Context, o mcpOptions) *cliError {
 	if err != nil {
 		return err
 	}
+	a.warnFilesOverSSM("focal mcp", cfg)
 
 	// Said only once the configuration and the keys have been accepted, so
 	// a start refused for either keeps its stderr to the one error line

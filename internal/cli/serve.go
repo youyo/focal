@@ -211,6 +211,7 @@ func (a *app) serveHandler(o serveOptions, token string) (*serveHandler, *cliErr
 	if err != nil {
 		return nil, err
 	}
+	a.warnFilesOverSSM("focal serve", cfg)
 	auth, authErr := newUpstreamAuth(token)
 	if authErr != nil {
 		return nil, usageError(authErr.Code, authErr.Message, authErr.Field, authErr.Allowed)
@@ -334,6 +335,24 @@ func (a *app) warnPlaintextBeyondLoopback(addr string) {
 			"The upstream token is demanded of every request, but nothing here is encrypted: the\n"+
 			"token and every answer cross the network in the clear. Terminate TLS in front of focal.\n",
 		addr)
+}
+
+// warnFilesOverSSM says, once at the start of a command that keeps serving,
+// what holds for files on an installation that offers both: over SSM the
+// listing is taken by root, so the same paths show what root can read rather
+// than what the SSH user can (ADR 0012). It is a fact about the configuration,
+// not a refusal, and there is no setting that silences it; a single CLI run,
+// whose caller chose the transport on the command line, does not print it.
+func (a *app) warnFilesOverSSM(command string, cfg config.Config) {
+	files, ok := cfg.Operation("files")
+	if !ok || !files.Enabled() || !cfg.TransportEnabled(vo.TransportSSM) {
+		return
+	}
+	fmt.Fprintf(a.stderr,
+		"%s: warning: ssm is in execution.transports and files is enabled. Over SSM, files lists\n"+
+			"directories with root's permissions: the same paths show what root can read, including\n"+
+			"directories the SSH user cannot open.\n",
+		command)
 }
 
 // listenUnix binds the Unix domain socket at path.

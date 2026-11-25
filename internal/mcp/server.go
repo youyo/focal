@@ -182,10 +182,12 @@ func (s *server) call(ctx context.Context, name string, args toolArgs) (*sdk.Cal
 	}
 
 	// The operation is known to be enabled — a disabled one has no tool —
-	// so this only reads the ceilings the administrator set for it.
+	// so this only reads the ceilings and, for files, the allow list the
+	// administrator set for it.
 	opCfg, _ := s.cfg.Operation(name)
 	params := args.params()
 	params.MaxSince, params.MaxLines = opCfg.MaxSince(), opCfg.MaxLines()
+	params.FilesAllowList = opCfg.FilesAllowList()
 
 	op, err := s.registry.Build(name, params)
 	if err != nil {
