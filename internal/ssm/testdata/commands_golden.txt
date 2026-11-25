@@ -61,10 +61,10 @@
 'cat' '/etc/resolv.conf'
 
 # ProcessListCommand
-'ps' '-eo' 'pid,ppid,user,state,%cpu,%mem,etime,comm,args'
+'ps' '-eo' 'pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args'
 
 # ServiceStatusCommand
-'systemctl' 'show' 'nginx.service' '--no-pager' '--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result'
+'systemctl' 'show' 'nginx.service' '--no-pager' '--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent'
 
 # LogsCommand
 'journalctl' '-u' 'nginx.service' '--since=-30m' '-n' '200' '--no-pager' '--output=short-iso'

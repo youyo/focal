@@ -20,15 +20,15 @@ import (
 )
 
 // processesSample is one ps(1) response shaped exactly as the fixed argv asks
-// for it: pid,ppid,user,state,%cpu,%mem,etime,comm,args, header row first.
-const processesSample = `    PID    PPID USER     S %CPU %MEM     ELAPSED COMMAND         COMMAND
-      1       0 root     S  0.0  0.1 10-02:11:33 systemd         /sbin/init
-    412       1 root     S  0.0  0.3    02:11:33 nginx           nginx: master process
-    998     412 www-data S  1.5  0.9    01:00:00 nginx           nginx: worker process
-   1500       1 postgres S  0.2  2.0    00:30:00 postgres_export /usr/bin/postgres_exporter
+// for it: pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args, header row first.
+const processesSample = `    PID    PPID USER     S %CPU %MEM     ELAPSED NLWP COMMAND         COMMAND
+      1       0 root     S  0.0  0.1 10-02:11:33    1 systemd         /sbin/init
+    412       1 root     S  0.0  0.3    02:11:33    1 nginx           nginx: master process
+    998     412 www-data S  1.5  0.9    01:00:00    1 nginx           nginx: worker process
+   1500       1 postgres S  0.2  2.0    00:30:00    1 postgres_export /usr/bin/postgres_exporter
 `
 
-const processesHeader = `    PID    PPID USER     S %CPU %MEM     ELAPSED COMMAND         COMMAND
+const processesHeader = `    PID    PPID USER     S %CPU %MEM     ELAPSED NLWP COMMAND         COMMAND
 `
 
 func processesTarget(t *testing.T) vo.Target {
@@ -143,7 +143,7 @@ func TestNewProcessesRejectsBadInput(t *testing.T) {
 // locally" contract: however a caller narrows the answer, the remote host is
 // asked the same question. No part of a filter is ever composed into an argv.
 func TestProcessesArgvIsFixedForEveryFilter(t *testing.T) {
-	wantArgs := []string{"-eo", "pid,ppid,user,state,%cpu,%mem,etime,comm,args"}
+	wantArgs := []string{"-eo", "pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args"}
 	cases := []struct {
 		label string
 		name  string
@@ -197,14 +197,14 @@ func TestProcessesFilterSelectsRows(t *testing.T) {
 			label: "name matches the comm column",
 			name:  "nginx",
 			want: processesHeader +
-				"    412       1 root     S  0.0  0.3    02:11:33 nginx           nginx: master process\n" +
-				"    998     412 www-data S  1.5  0.9    01:00:00 nginx           nginx: worker process\n",
+				"    412       1 root     S  0.0  0.3    02:11:33    1 nginx           nginx: master process\n" +
+				"    998     412 www-data S  1.5  0.9    01:00:00    1 nginx           nginx: worker process\n",
 		},
 		{
 			label: "name is a substring match on comm",
 			name:  "post",
 			want: processesHeader +
-				"   1500       1 postgres S  0.2  2.0    00:30:00 postgres_export /usr/bin/postgres_exporter\n",
+				"   1500       1 postgres S  0.2  2.0    00:30:00    1 postgres_export /usr/bin/postgres_exporter\n",
 		},
 		{
 			label: "name does not match the args column",
@@ -215,7 +215,7 @@ func TestProcessesFilterSelectsRows(t *testing.T) {
 			label: "pid is an exact match on the pid column",
 			pid:   "1",
 			want: processesHeader +
-				"      1       0 root     S  0.0  0.1 10-02:11:33 systemd         /sbin/init\n",
+				"      1       0 root     S  0.0  0.1 10-02:11:33    1 systemd         /sbin/init\n",
 		},
 		{
 			label: "pid does not match on a prefix",
@@ -227,7 +227,7 @@ func TestProcessesFilterSelectsRows(t *testing.T) {
 			name:  "nginx",
 			pid:   "998",
 			want: processesHeader +
-				"    998     412 www-data S  1.5  0.9    01:00:00 nginx           nginx: worker process\n",
+				"    998     412 www-data S  1.5  0.9    01:00:00    1 nginx           nginx: worker process\n",
 		},
 		{
 			label: "no row matches both",

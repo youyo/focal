@@ -29,6 +29,10 @@ SubState=running
 MainPID=412
 ExecMainStatus=0
 Result=success
+TasksCurrent=5
+TasksMax=4915
+NRestarts=0
+MemoryCurrent=12345678
 Environment=SECRET=hunter2
 FragmentPath=/lib/systemd/system/nginx.service
 `
@@ -89,7 +93,7 @@ func TestNewServiceRejectsBadInput(t *testing.T) {
 // itself belongs to normalizeUnitName in exec.go; what this asserts is that
 // service.go goes through it rather than appending ".service" of its own.
 func TestServiceArgv(t *testing.T) {
-	const properties = "--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result"
+	const properties = "--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent"
 	cases := []struct {
 		in       string
 		wantUnit string
@@ -169,6 +173,10 @@ func TestServiceParseKeepsOnlyRequestedProperties(t *testing.T) {
 		"MainPID":        "412",
 		"ExecMainStatus": "0",
 		"Result":         "success",
+		"TasksCurrent":   "5",
+		"TasksMax":       "4915",
+		"NRestarts":      "0",
+		"MemoryCurrent":  "12345678",
 	}
 	if !reflect.DeepEqual(data, want) {
 		t.Errorf("serviceParse(...) =\n%v\nwant\n%v", data, want)

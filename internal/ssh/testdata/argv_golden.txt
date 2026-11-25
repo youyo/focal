@@ -97,10 +97,10 @@ ssh -n -T -o BatchMode=yes -- example.com ss -lntup
 ssh -n -T -o BatchMode=yes -- example.com cat /etc/resolv.conf
 
 # ProcessListCommand
-ssh -n -T -o BatchMode=yes -- example.com ps -eo pid,ppid,user,state,%cpu,%mem,etime,comm,args
+ssh -n -T -o BatchMode=yes -- example.com ps -eo pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args
 
 # ServiceStatusCommand
-ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result
+ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent
 
 # LogsCommand
 ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --no-pager --output=short-iso

@@ -94,12 +94,12 @@ func (o Processes) Execute(ctx context.Context, ex ssh.Executor, t vo.Target, p 
 }
 
 // The column positions processesFilter reads, fixed by the -eo list
-// ssh.ProcessListCommand pins: pid,ppid,user,state,%cpu,%mem,etime,comm,args.
-// Only the first eight columns are whitespace-free, so a row is addressable by
+// ssh.ProcessListCommand pins: pid,ppid,user,state,%cpu,%mem,etime,nlwp,comm,args.
+// Only the first nine columns are whitespace-free, so a row is addressable by
 // field index up to comm; args is whatever follows and is not matched against.
 const (
 	processesPIDField  = 0
-	processesCommField = 7
+	processesCommField = 8
 	processesMinFields = processesCommField + 1
 )
 
