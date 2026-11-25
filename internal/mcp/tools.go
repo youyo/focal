@@ -80,7 +80,7 @@ type logsArgs struct {
 	hostArgs
 	Service string `json:"service" jsonschema:"the systemd unit whose journal to read, e.g. nginx or nginx.service"`
 	Since   string `json:"since,omitempty" jsonschema:"how far back to read, e.g. 30m or 24h"`
-	Lines   *int   `json:"lines,omitempty" jsonschema:"how many lines to return, e.g. 200"`
+	Lines   *int   `json:"lines,omitempty" jsonschema:"how many of the newest lines in the window to return, oldest first, e.g. 200"`
 }
 
 func (a logsArgs) params() operation.Params {
@@ -90,7 +90,7 @@ func (a logsArgs) params() operation.Params {
 type kernelArgs struct {
 	hostArgs
 	Since string `json:"since,omitempty" jsonschema:"how far back to read, e.g. 1h or 24h"`
-	Lines *int   `json:"lines,omitempty" jsonschema:"how many lines to return, e.g. 200"`
+	Lines *int   `json:"lines,omitempty" jsonschema:"how many of the newest lines in the window to return, oldest first, e.g. 200"`
 }
 
 func (a kernelArgs) params() operation.Params {

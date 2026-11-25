@@ -67,11 +67,11 @@ var operationSpecs = map[string][]argSpec{
 	"logs": {
 		{Usage: "SERVICE", Field: serviceNameField},
 		{Flag: "since", Usage: "how far back to read, e.g. 30m or 24h", Field: sinceField},
-		{Flag: "lines", Usage: "how many lines to return, e.g. 200", Field: linesField},
+		{Flag: "lines", Usage: "how many of the newest lines in the window to return, oldest first, e.g. 200", Field: linesField},
 	},
 	"kernel": {
 		{Flag: "since", Usage: "how far back to read, e.g. 30m or 24h", Field: sinceField},
-		{Flag: "lines", Usage: "how many lines to return, e.g. 200", Field: linesField},
+		{Flag: "lines", Usage: "how many of the newest lines in the window to return, oldest first, e.g. 200", Field: linesField},
 	},
 }
 

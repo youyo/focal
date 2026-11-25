@@ -573,7 +573,7 @@ func TestServeRunsTheOperationOverSSH(t *testing.T) {
 	if got := calls[0].Command.Program(); got != "journalctl" {
 		t.Errorf("program = %q, want journalctl", got)
 	}
-	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if got := calls[0].Command.Args(); !slices.Equal(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
 	}

@@ -106,7 +106,12 @@ func journalLines(requested, def, ceiling vo.LineLimit) (vo.LineLimit, *result.E
 // buildPart owns the rule for which Status an Output means, so a single-Command
 // operation reads it from there rather than restating it; there is nothing to
 // aggregate, so Parts stays empty and the fields carry the answer directly.
+//
+// Both readers pass --reverse, so stdout arrives newest first; it is put back
+// oldest first here, the one place both of them go through. Stderr is left as
+// the remote side wrote it.
 func journalEnvelope(name string, t vo.Target, out ssh.Output, execErr error) result.Envelope {
+	out.Stdout = journalOldestFirst(out.Stdout, out.Truncated)
 	part := buildPart(name, out, execErr)
 	return result.Envelope{
 		Operation:  name,

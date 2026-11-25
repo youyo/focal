@@ -154,6 +154,11 @@ func ServiceStatusCommand(p policy.Policy, unit vo.ServiceName) (Command, *resul
 // refused if it ever begins with a hyphen of its own. -n is always passed, so
 // the answer does not silently become journalctl's default of ten lines on a
 // host that configured it differently.
+//
+// --reverse makes -n take the newest entries of the span: without it, a
+// journalctl that is also given --since counts from the oldest end (systemd
+// 252 does). The answer therefore arrives newest first, and internal/operation
+// puts it back in the order the entries were written (ADR 0009).
 func LogsCommand(p policy.Policy, unit vo.ServiceName, since vo.Duration, lines vo.LineLimit) (Command, *result.Error) {
 	return newCommand(p, "journalctl",
 		lit("-u"),
@@ -161,6 +166,7 @@ func LogsCommand(p policy.Policy, unit vo.ServiceName, since vo.Duration, lines 
 		prefixed("--since=-", since.String()),
 		lit("-n"),
 		val(lines.String()),
+		lit("--reverse"),
 		lit("--no-pager"),
 		lit("--output=short-iso"),
 	)
@@ -168,13 +174,14 @@ func LogsCommand(p policy.Policy, unit vo.ServiceName, since vo.Duration, lines 
 
 // KernelLogsCommand builds journalctl -k: the kernel ring buffer as the
 // journal holds it. It is the same shape as LogsCommand without a unit, since
-// -k selects the messages instead.
+// -k selects the messages instead, and it takes --reverse for the same reason.
 func KernelLogsCommand(p policy.Policy, since vo.Duration, lines vo.LineLimit) (Command, *result.Error) {
 	return newCommand(p, "journalctl",
 		lit("-k"),
 		prefixed("--since=-", since.String()),
 		lit("-n"),
 		val(lines.String()),
+		lit("--reverse"),
 		lit("--no-pager"),
 		lit("--output=short-iso"),
 	)

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -283,5 +284,22 @@ func TestProcessesArgsRejectInjection(t *testing.T) {
 				t.Errorf("a rejected input still reached the runner: %+v", runner.calls)
 			}
 		})
+	}
+}
+
+// TestLinesDescriptionSaysWhichLines pins the schema description of lines for
+// both journal tools: the newest lines of the window, returned oldest first.
+func TestLinesDescriptionSaysWhichLines(t *testing.T) {
+	const want = "how many of the newest lines in the window to return, oldest first, e.g. 200"
+	for _, args := range []any{logsArgs{}, kernelArgs{}} {
+		ty := reflect.TypeOf(args)
+		f, ok := ty.FieldByName("Lines")
+		if !ok {
+			t.Errorf("%s has no Lines field", ty.Name())
+			continue
+		}
+		if got := f.Tag.Get("jsonschema"); got != want {
+			t.Errorf("%s.Lines description = %q, want %q", ty.Name(), got, want)
+		}
 	}
 }

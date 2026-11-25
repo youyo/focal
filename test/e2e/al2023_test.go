@@ -97,6 +97,74 @@ func TestAL2023Logs(t *testing.T) {
 	}
 }
 
+// journalEntryStart matches the first line of a short-iso journal entry: the
+// timestamp, in either offset spelling, followed by a space. Every other line
+// belongs to the entry above it. The test keeps its own copy of the rule so
+// that it checks focal's grouping rather than reusing it.
+var journalEntryStart = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:?\d{2} `)
+
+// splitJournalEntries groups stdout into entries, each one its first line
+// followed by its continuation lines.
+func splitJournalEntries(stdout string) [][]string {
+	var entries [][]string
+	for _, row := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		if journalEntryStart.MatchString(row) || len(entries) == 0 {
+			entries = append(entries, []string{row})
+			continue
+		}
+		entries[len(entries)-1] = append(entries[len(entries)-1], row)
+	}
+	return entries
+}
+
+// TestAL2023LogsReturnsTheNewestEntriesOldestFirst asks for fewer lines than
+// the span holds. focal-e2e-logger.service's journal is, oldest first:
+// systemd's "Starting", the three marker lines, the multi-line entry and
+// systemd's "Started". The answer must be the newest entries of that span, in
+// the order they were written, with the multi-line entry kept whole.
+func TestAL2023LogsReturnsTheNewestEntriesOldestFirst(t *testing.T) {
+	h := requireAL2023(t)
+
+	for _, tc := range []struct {
+		lines string
+		want  []string // a substring of each entry's first line, oldest first
+	}{
+		{"2", []string{al2023MultilineParts[0], "Started focal-e2e-logger.service"}},
+		{"3", []string{al2023LoggerLines[2], al2023MultilineParts[0], "Started focal-e2e-logger.service"}},
+	} {
+		t.Run("lines "+tc.lines, func(t *testing.T) {
+			stdout, stderr, code := h.cli(context.Background(), "logs", "focal-e2e-logger", "--lines", tc.lines)
+			if code != 0 {
+				t.Fatalf("exit %d, stderr: %s", code, stderr)
+			}
+			env := decodeEnvelope(t, stdout)
+			if env.Status != "ok" {
+				t.Fatalf("status = %q, want ok\n%s", env.Status, stdout)
+			}
+			entries := splitJournalEntries(env.Stdout)
+			if len(entries) != len(tc.want) {
+				t.Fatalf("got %d entries, want %d\n%s", len(entries), len(tc.want), env.Stdout)
+			}
+			for i, want := range tc.want {
+				if !strings.Contains(entries[i][0], want) {
+					t.Errorf("entry %d starts %q, want it to contain %q\n%s", i, entries[i][0], want, env.Stdout)
+				}
+			}
+			// The multi-line entry is one entry: its first line directly
+			// followed by its two continuation lines, nothing in between.
+			multiline := entries[len(entries)-2]
+			if len(multiline) != len(al2023MultilineParts) {
+				t.Fatalf("multi-line entry has %d lines, want %d\n%s", len(multiline), len(al2023MultilineParts), env.Stdout)
+			}
+			for i, part := range al2023MultilineParts {
+				if !strings.Contains(multiline[i], part) {
+					t.Errorf("multi-line entry line %d = %q, want it to contain %q\n%s", i, multiline[i], part, env.Stdout)
+				}
+			}
+		})
+	}
+}
+
 func TestAL2023System(t *testing.T) {
 	h := requireAL2023(t)
 

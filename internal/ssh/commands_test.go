@@ -57,10 +57,10 @@ func factoryCases(t *testing.T) []factoryCase {
 			"--property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent",
 		}},
 		{"LogsCommand", must(LogsCommand(p, unit, since, lines)), "journalctl", []string{
-			"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso",
+			"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
 		}},
 		{"KernelLogsCommand", must(KernelLogsCommand(p, kernelSince, lines)), "journalctl", []string{
-			"-k", "--since=-1h", "-n", "200", "--no-pager", "--output=short-iso",
+			"-k", "--since=-1h", "-n", "200", "--reverse", "--no-pager", "--output=short-iso",
 		}},
 	}
 }

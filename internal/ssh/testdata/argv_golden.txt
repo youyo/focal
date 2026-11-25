@@ -103,7 +103,7 @@ ssh -n -T -o BatchMode=yes -- example.com ps -eo pid,ppid,user,state,%cpu,%mem,e
 ssh -n -T -o BatchMode=yes -- example.com systemctl show nginx.service --no-pager --property=Id,Description,LoadState,ActiveState,SubState,MainPID,ExecMainStatus,Result,TasksCurrent,TasksMax,NRestarts,MemoryCurrent
 
 # LogsCommand
-ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --no-pager --output=short-iso
+ssh -n -T -o BatchMode=yes -- example.com journalctl -u nginx.service --since=-30m -n 200 --reverse --no-pager --output=short-iso
 
 # KernelLogsCommand
-ssh -n -T -o BatchMode=yes -- example.com journalctl -k --since=-1h -n 200 --no-pager --output=short-iso
+ssh -n -T -o BatchMode=yes -- example.com journalctl -k --since=-1h -n 200 --reverse --no-pager --output=short-iso

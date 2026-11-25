@@ -165,7 +165,7 @@ func TestLogs_GoldenArgv(t *testing.T) {
 	if got := call.Command.Program(); got != "journalctl" {
 		t.Fatalf("program = %q, want %q", got, "journalctl")
 	}
-	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if got := call.Command.Args(); !slices.Equal(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
 	}
@@ -181,7 +181,7 @@ func TestLogs_DefaultsWhenFlagsOmitted(t *testing.T) {
 	if res.code != exitOK {
 		t.Fatalf("exit code = %d, want 0; stderr=%s", res.code, res.stderr)
 	}
-	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-u", "nginx.service", "--since=-30m", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if got := res.calls[0].Command.Args(); !slices.Equal(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
 	}
@@ -365,7 +365,7 @@ func TestEnabledKernel_RecordsArgv(t *testing.T) {
 	if len(res.calls) != 1 {
 		t.Fatalf("recorded %d calls, want 1", len(res.calls))
 	}
-	want := []string{"-k", "--since=-1h", "-n", "200", "--no-pager", "--output=short-iso"}
+	want := []string{"-k", "--since=-1h", "-n", "200", "--reverse", "--no-pager", "--output=short-iso"}
 	if got := res.calls[0].Command.Args(); !slices.Equal(got, want) {
 		t.Fatalf("args = %q, want %q", got, want)
 	}

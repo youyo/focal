@@ -157,3 +157,24 @@ func TestOperationUsage(t *testing.T) {
 		t.Fatalf("usage = %q, want %q", got, want)
 	}
 }
+
+// TestLinesUsageSaysWhichLines pins the help text of --lines for both journal
+// readers: the newest lines of the window, returned oldest first.
+func TestLinesUsageSaysWhichLines(t *testing.T) {
+	const want = "how many of the newest lines in the window to return, oldest first, e.g. 200"
+	for _, op := range []string{"logs", "kernel"} {
+		found := false
+		for _, spec := range operationSpecs[op] {
+			if spec.Flag != "lines" {
+				continue
+			}
+			found = true
+			if spec.Usage != want {
+				t.Errorf("%s --lines usage = %q, want %q", op, spec.Usage, want)
+			}
+		}
+		if !found {
+			t.Errorf("%s has no --lines flag", op)
+		}
+	}
+}
